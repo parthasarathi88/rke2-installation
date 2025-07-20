@@ -1,0 +1,97 @@
+---
+# Default variables for monitoring role - POC Environment
+# Optimized for 4GB RAM nodes with minimal resource usage
+
+# Enable monitoring stack deployment
+enable_monitoring: true
+
+# Chart version
+monitoring_chart_version: "55.5.0"
+
+# Storage class (should match your storage provisioner)
+monitoring_storage_class: "synostorage"
+
+# Retention settings (POC optimized)
+prometheus_retention: "1d"
+prometheus_retention_size: "900MB"
+alertmanager_retention: "24h"
+
+# Polling frequency (POC optimized)
+scrape_interval: "5m"
+evaluation_interval: "5m"
+
+# Storage sizes (POC optimized - synostorage requires minimum 1GB)
+prometheus_storage_size: "1Gi"
+grafana_storage_size: "1Gi"
+alertmanager_storage_size: "1Gi"
+
+# Resource limits for 4GB RAM nodes
+prometheus_resources:
+  limits:
+    cpu: "200m"
+    memory: "512Mi"
+  requests:
+    cpu: "100m"
+    memory: "256Mi"
+
+grafana_resources:
+  limits:
+    cpu: "200m"
+    memory: "256Mi"
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+
+alertmanager_resources:
+  limits:
+    cpu: "100m"
+    memory: "256Mi"
+  requests:
+    cpu: "50m"
+    memory: "128Mi"
+
+# Node Exporter resources
+nodeexporter_resources:
+  limits:
+    cpu: "100m"
+    memory: "128Mi"
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+
+# Kube State Metrics resources
+kubestatemetrics_resources:
+  limits:
+    cpu: "100m"
+    memory: "128Mi"
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+
+# Prometheus Operator resources
+prometheusoperator_resources:
+  limits:
+    cpu: "200m"
+    memory: "256Mi"
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+
+# Grafana credentials
+grafana_admin_user: "admin"
+grafana_admin_password: "admin123"
+
+# Hostnames for external access (configure DNS to point to 192.168.1.201)
+grafana_hostname: "grafana.dellpc.in"
+prometheus_hostname: "prometheus.dellpc.in"
+alertmanager_hostname: "alertmanager.dellpc.in"
+
+# Node selector for worker nodes
+node_selector:
+  worker: "node-role.kubernetes.io/worker: true"
+
+# Ingress class for external access
+ingress_class: "kong-external"
+
+# External LoadBalancer IP (Kong external proxy)
+external_loadbalancer_ip: "192.168.1.201"

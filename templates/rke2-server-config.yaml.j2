@@ -1,0 +1,44 @@
+# RKE2 Server Configuration
+token: {{ token }}
+cluster-cidr: 10.42.0.0/16
+service-cidr: 10.43.0.0/16
+cluster-dns: 10.43.0.10
+cluster-domain: cluster.local
+
+# TLS SAN entries for external access
+tls-san:
+  - 192.168.1.200
+  - rancher.dellpc.in
+  - {{ ansible_default_ipv4.address }}
+  - localhost
+  - 127.0.0.1
+
+# Network settings
+cni: canal
+disable-kube-proxy: false
+
+# Security settings
+secrets-encryption: true
+
+# Performance tuning for 6GB nodes
+etcd-arg:
+  - "--heartbeat-interval=500"
+  - "--election-timeout=5000"
+  - "--max-request-bytes=33554432"
+
+kube-apiserver-arg:
+  - "--max-requests-inflight=800"
+  - "--max-mutating-requests-inflight=400"
+  - "--request-timeout=300s"
+
+kube-controller-manager-arg:
+  - "--node-monitor-period=5s"
+  - "--node-monitor-grace-period=20s"
+
+kubelet-arg:
+  - "--max-pods=110"
+  - "--kube-reserved=cpu=200m,memory=300Mi"
+  - "--system-reserved=cpu=200m,memory=200Mi"
+  - "--eviction-hard=memory.available<500Mi"
+  - "--image-gc-high-threshold=85"
+  - "--image-gc-low-threshold=80"

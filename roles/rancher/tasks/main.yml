@@ -1,0 +1,195 @@
+---
+# Rancher Management UI Deployment Tasks
+# =======================================
+# Deploy Rancher Management UI on RKE2 cluster with Let's Encrypt SSL
+
+- name: Display Rancher deployment overview
+  debug:
+    msg: |
+      🚀 Deploying Rancher Management UI
+      ==================================
+      
+      📋 Configuration:
+      • Rancher Version: {{ rancher_version }}
+      • Chart Version: {{ rancher_chart_version }}
+      • Hostname: {{ rancher_hostname }}
+      • Replicas: {{ rancher_replicas }}
+      • SSL Mode: {{ rancher_ssl_mode }}
+      {% if rancher_ssl_mode == 'letsEncrypt' %}
+      • Let's Encrypt Email: {{ letsencrypt_email }}
+      • Environment: {{ rancher_letsencrypt_environment }}
+      {% endif %}
+      
+      ⏱️ Expected deployment time: 5-10 minutes
+
+- name: Check if Rancher is already installed
+  kubernetes.core.helm_info:
+    name: rancher
+    release_namespace: cattle-system
+    binary_path: "{{ helm_binary }}"
+  register: rancher_helm_info
+  ignore_errors: true
+
+- name: Create cattle-system namespace
+  kubernetes.core.k8s:
+    name: cattle-system
+    api_version: v1
+    kind: Namespace
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+  when: rancher_helm_info.status is not defined or rancher_helm_info.status.status != "deployed"
+
+- name: Add Rancher Helm repository
+  kubernetes.core.helm_repository:
+    name: "{{ rancher_helm_repo_name }}"
+    repo_url: "{{ rancher_helm_repo_url }}"
+    binary_path: "{{ helm_binary }}"
+  when: rancher_helm_info.status is not defined or rancher_helm_info.status.status != "deployed"
+
+- name: Prepare Rancher Helm values
+  set_fact:
+    rancher_helm_values:
+      hostname: "{{ rancher_hostname }}"
+      replicas: "{{ rancher_replicas }}"
+      bootstrapPassword: "{{ rancher_bootstrap_password }}"
+      resources: "{{ rancher_resources }}"
+      ingress:
+        ingressClassName: "{{ rancher_ingress_class }}"
+
+- name: Add Let's Encrypt configuration to Helm values
+  set_fact:
+    rancher_helm_values: "{{ rancher_helm_values | combine(letsencrypt_config, recursive=True) }}"
+  vars:
+    letsencrypt_config:
+      ingress:
+        ingressClassName: "{{ rancher_ingress_class }}"
+        tls:
+          source: letsEncrypt
+      letsEncrypt:
+        email: "{{ letsencrypt_email }}"
+        environment: "{{ rancher_letsencrypt_environment }}"
+  when: rancher_ssl_mode == "letsEncrypt"
+
+- name: Add Rancher-generated certificates configuration to Helm values
+  set_fact:
+    rancher_helm_values: "{{ rancher_helm_values | combine(rancher_tls_config, recursive=True) }}"
+  vars:
+    rancher_tls_config:
+      ingress:
+        ingressClassName: "{{ rancher_ingress_class }}"
+        tls:
+          source: rancher
+  when: rancher_ssl_mode == "rancher"
+
+- name: Install Rancher using Helm
+  kubernetes.core.helm:
+    name: rancher
+    chart_ref: "{{ rancher_helm_repo_name }}/rancher"
+    chart_version: "{{ rancher_chart_version }}"
+    release_namespace: cattle-system
+    create_namespace: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    binary_path: "{{ helm_binary }}"
+    values: "{{ rancher_helm_values }}"
+    wait: true
+    wait_timeout: "600s"
+  when: rancher_helm_info.status is not defined or rancher_helm_info.status.status != "deployed"
+
+- name: Wait for Rancher pods to be ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: cattle-system
+    label_selectors:
+      - app=rancher
+    wait: true
+    wait_condition:
+      type: Ready
+      status: "True"
+    wait_timeout: 600
+    kubeconfig: "{{ kubeconfig_path }}"
+  when: rancher_helm_info.status is not defined or rancher_helm_info.status.status != "deployed"
+
+- name: Get Rancher service information
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: cattle-system
+    name: rancher
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: rancher_service
+
+- name: Get Rancher ingress information
+  kubernetes.core.k8s_info:
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    namespace: cattle-system
+    name: rancher
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: rancher_ingress
+  ignore_errors: true
+
+- name: Check SSL certificate status (Let's Encrypt)
+  kubernetes.core.k8s_info:
+    api_version: cert-manager.io/v1
+    kind: Certificate
+    namespace: cattle-system
+    name: tls-rancher-ingress
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: rancher_certificate
+  ignore_errors: true
+  when: rancher_ssl_mode == "letsEncrypt"
+
+- name: Display Rancher access information (new installation)
+  debug:
+    msg: |
+      🎉 Rancher Management UI Deployed Successfully!
+      ==============================================
+      
+      🌐 Access Information:
+      • URL: https://{{ rancher_hostname }}
+      • Username: admin
+      • Password: {{ rancher_bootstrap_password }}
+      
+      📋 Next Steps:
+      1. Configure DNS: {{ rancher_hostname }} → 192.168.1.201 (Kong LoadBalancer)
+      2. Access Rancher UI and complete initial setup
+      3. Change the default password immediately
+      4. Import or create additional clusters
+      
+      🔒 SSL Certificate Status:
+      {% if rancher_ssl_mode == "letsEncrypt" %}
+      • Type: Let's Encrypt ({{ rancher_letsencrypt_environment }})
+      • Email: {{ letsencrypt_email }}
+      {% if rancher_certificate.resources is defined and rancher_certificate.resources|length > 0 %}
+      • Status: {{ rancher_certificate.resources[0].status.conditions[-1].type if rancher_certificate.resources[0].status.conditions is defined else 'Provisioning' }}
+      {% else %}
+      • Status: Provisioning (may take a few minutes)
+      {% endif %}
+      {% else %}
+      • Type: Rancher-generated certificates
+      {% endif %}
+      
+      💡 Troubleshooting:
+      • Check pods: kubectl get pods -n cattle-system
+      • Check ingress: kubectl get ingress -n cattle-system
+      • Check certificate: kubectl get certificate -n cattle-system
+      • Check logs: kubectl logs -n cattle-system -l app=rancher
+  when: rancher_helm_info.status is not defined or rancher_helm_info.status.status != "deployed"
+
+- name: Display Rancher status (already installed)
+  debug:
+    msg: |
+      ✅ Rancher Management UI Already Installed
+      =========================================
+      
+      🌐 Access Information:
+      • URL: https://{{ rancher_hostname }}
+      • Status: {{ rancher_helm_info.status.status | default('Unknown') }}
+      • Chart Version: {{ rancher_helm_info.status.chart | default('Unknown') }}
+      
+      💡 Management Commands:
+      • Update: helm upgrade rancher {{ rancher_helm_repo_name }}/rancher -n cattle-system
+      • Status: helm status rancher -n cattle-system
+      • Uninstall: helm uninstall rancher -n cattle-system
+  when: rancher_helm_info.status is defined and rancher_helm_info.status.status == "deployed"

@@ -1,0 +1,67 @@
+---
+# Complete MetalLB Setup for RKE2 Cluster
+# Includes namespace, IP pools, L2 advertisement, and API server LoadBalancer
+
+# MetalLB Namespace with security labels
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ metallb_namespace }}
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+# MetalLB IP Address Pool
+# Includes dedicated IP for API server and range for services
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: default-pool
+  namespace: {{ metallb_namespace }}
+spec:
+  addresses:
+  - {{ metallb_api_server_ip }}/32
+  - {{ metallb_ip_pool }}
+---
+# L2 Advertisement for MetalLB
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: default-l2-adv
+  namespace: {{ metallb_namespace }}
+spec:
+  ipAddressPools:
+  - default-pool
+---
+# RKE2 API Server LoadBalancer Service
+# Provides external access to API server via {{ metallb_api_server_ip }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: rke2-api-server-lb
+  namespace: default
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: {{ metallb_api_server_ip }}
+spec:
+  type: LoadBalancer
+  ports:
+  - name: api-server
+    port: 6443
+    targetPort: 6443
+    protocol: TCP
+---
+# Endpoints for RKE2 API Server LoadBalancer
+# Points to the master node where API server runs
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: rke2-api-server-lb
+  namespace: default
+subsets:
+- addresses:
+  - ip: {{ rke2_master_ip }}
+  ports:
+  - name: api-server
+    port: 6443
+    protocol: TCP

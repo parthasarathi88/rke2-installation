@@ -1,0 +1,24 @@
+---
+galaxy_info:
+  author: RKE2 Operations Team
+  description: Monitoring stack for RKE2 cluster with Prometheus, Grafana, and AlertManager
+  company: POC Environment
+  license: MIT
+  min_ansible_version: 2.9
+  platforms:
+    - name: EL
+      versions:
+        - 7
+        - 8
+        - 9
+  galaxy_tags:
+    - monitoring
+    - prometheus
+    - grafana
+    - alertmanager
+    - kubernetes
+    - rke2
+
+dependencies:
+  - role: networking
+    when: networking_required | default(false)

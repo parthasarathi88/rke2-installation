@@ -1,0 +1,420 @@
+---
+# Logging and Tracing Role - Main Tasks
+# =====================================
+# Deploys ELK Stack (Elasticsearch, Logstash, Kibana) + Jaeger for distributed tracing
+# Optimized for POC environment with resource constraints
+
+- name: Create logging-tracing namespace
+  shell: /var/lib/rancher/rke2/bin/kubectl create namespace {{ logging_namespace }} --dry-run=client -o yaml | /var/lib/rancher/rke2/bin/kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  tags:
+    - logging
+    - tracing
+    - namespace
+
+- name: Add Elastic Helm repository
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm repo add elastic https://helm.elastic.co
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  tags:
+    - logging
+    - helm
+
+- name: Add Jaeger Helm repository
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  tags:
+    - tracing
+    - helm
+
+- name: Update Helm repositories
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  tags:
+    - logging
+    - tracing
+    - helm
+
+# Deploy Elasticsearch
+- name: Deploy Elasticsearch
+  kubernetes.core.helm:
+    name: elasticsearch
+    chart_ref: elastic/elasticsearch
+    chart_version: "{{ elasticsearch_chart_version }}"
+    release_namespace: "{{ logging_namespace }}"
+    create_namespace: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    values:
+      replicas: "{{ elasticsearch_replicas }}"
+      minimumMasterNodes: "{{ elasticsearch_min_master_nodes }}"
+      
+      # Resource limits for POC environment
+      resources:
+        requests:
+          cpu: "{{ elasticsearch_cpu_request }}"
+          memory: "{{ elasticsearch_memory_request }}"
+        limits:
+          cpu: "{{ elasticsearch_cpu_limit }}"
+          memory: "{{ elasticsearch_memory_limit }}"
+      
+      # JVM heap settings for 4GB nodes
+      esJavaOpts: "{{ elasticsearch_java_opts }}"
+      
+      # Volume settings for synostorage
+      volumeClaimTemplate:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: "{{ storage_class }}"
+        resources:
+          requests:
+            storage: "{{ elasticsearch_storage_size }}"
+      
+      # POC configuration - single node mode
+      clusterHealthCheckParams: "wait_for_status=yellow&timeout=1s"
+      
+      # Security disabled for POC
+      esConfig:
+        elasticsearch.yml: |
+          xpack.security.enabled: false
+          xpack.security.enrollment.enabled: false
+          xpack.security.http.ssl.enabled: false
+          xpack.security.transport.ssl.enabled: false
+          
+      # Service configuration
+      service:
+        type: ClusterIP
+        ports:
+          - name: http
+            port: 9200
+            protocol: TCP
+          - name: transport
+            port: 9300
+            protocol: TCP
+            
+      # Ingress for external access
+      ingress:
+        enabled: "{{ elasticsearch_ingress_enabled }}"
+        className: kong-external
+        annotations:
+          konghq.com/strip-path: "true"
+          konghq.com/preserve-host: "true"
+        hosts:
+          - host: "{{ elasticsearch_external_url }}"
+            paths:
+              - path: /
+                pathType: Prefix
+                
+  tags:
+    - logging
+    - elasticsearch
+
+# Deploy Kibana
+- name: Deploy Kibana
+  kubernetes.core.helm:
+    name: kibana
+    chart_ref: elastic/kibana
+    chart_version: "{{ kibana_chart_version }}"
+    release_namespace: "{{ logging_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+    values:
+      # Resource limits for POC environment
+      resources:
+        requests:
+          cpu: "{{ kibana_cpu_request }}"
+          memory: "{{ kibana_memory_request }}"
+        limits:
+          cpu: "{{ kibana_cpu_limit }}"
+          memory: "{{ kibana_memory_limit }}"
+          
+      # Elasticsearch connection
+      elasticsearchHosts: "http://elasticsearch-master:9200"
+      
+      # Kibana configuration
+      kibanaConfig:
+        kibana.yml: |
+          server.host: "0.0.0.0"
+          server.shutdownTimeout: "5s"
+          elasticsearch.hosts: ["http://elasticsearch-master:9200"]
+          monitoring.ui.container.elasticsearch.enabled: true
+          xpack.security.enabled: false
+          xpack.encryptedSavedObjects.encryptionKey: "{{ kibana_encryption_key }}"
+          
+      # Service configuration
+      service:
+        type: ClusterIP
+        port: 5601
+        
+      # Ingress for external access
+      ingress:
+        enabled: "{{ kibana_ingress_enabled }}"
+        className: kong-external
+        annotations:
+          konghq.com/strip-path: "true"
+          konghq.com/preserve-host: "true"
+        hosts:
+          - host: "{{ kibana_external_url }}"
+            paths:
+              - path: /
+                pathType: Prefix
+                
+  tags:
+    - logging
+    - kibana
+
+# Deploy Logstash
+- name: Deploy Logstash
+  kubernetes.core.helm:
+    name: logstash
+    chart_ref: elastic/logstash
+    chart_version: "{{ logstash_chart_version }}"
+    release_namespace: "{{ logging_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+    values:
+      replicas: "{{ logstash_replicas }}"
+      
+      # Resource limits for POC environment
+      resources:
+        requests:
+          cpu: "{{ logstash_cpu_request }}"
+          memory: "{{ logstash_memory_request }}"
+        limits:
+          cpu: "{{ logstash_cpu_limit }}"
+          memory: "{{ logstash_memory_limit }}"
+          
+      # Logstash configuration
+      logstashConfig:
+        logstash.yml: |
+          http.host: "0.0.0.0"
+          xpack.monitoring.elasticsearch.hosts: ["http://elasticsearch-master:9200"]
+          
+      logstashPipeline:
+        logstash.conf: |
+          input {
+            beats {
+              port => 5044
+            }
+            http {
+              port => 8080
+            }
+          }
+          filter {
+            if [kubernetes] {
+              mutate {
+                add_field => { "cluster" => "{{ cluster_name }}" }
+              }
+            }
+            date {
+              match => [ "@timestamp", "ISO8601" ]
+            }
+          }
+          output {
+            elasticsearch {
+              hosts => ["elasticsearch-master:9200"]
+              index => "logstash-logs-%{+YYYY.MM.dd}"
+            }
+          }
+          
+      # Service configuration
+      service:
+        type: ClusterIP
+        ports:
+          - name: beats
+            port: 5044
+            protocol: TCP
+          - name: http
+            port: 8080
+            protocol: TCP
+            
+  tags:
+    - logging
+    - logstash
+
+# Deploy Filebeat for log collection
+- name: Deploy Filebeat DaemonSet
+  kubernetes.core.helm:
+    name: filebeat
+    chart_ref: elastic/filebeat
+    chart_version: "{{ filebeat_chart_version }}"
+    release_namespace: "{{ logging_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+    values:
+      daemonset:
+        enabled: true
+        
+      # Resource limits for POC environment
+      resources:
+        requests:
+          cpu: "{{ filebeat_cpu_request }}"
+          memory: "{{ filebeat_memory_request }}"
+        limits:
+          cpu: "{{ filebeat_cpu_limit }}"
+          memory: "{{ filebeat_memory_limit }}"
+          
+      # Filebeat configuration
+      filebeatConfig:
+        filebeat.yml: |
+          filebeat.inputs:
+          - type: container
+            paths:
+              - /var/log/containers/*.log
+            processors:
+            - add_kubernetes_metadata:
+                host: ${NODE_NAME}
+                matchers:
+                - logs_path:
+                    logs_path: "/var/log/containers/"
+            - drop_fields:
+                fields: ["agent", "ecs", "host", "input"]
+                
+          output.logstash:
+            hosts: ["logstash-logstash:5044"]
+            
+          processors:
+          - add_host_metadata:
+              when.not.contains.tags: forwarded
+          - add_cloud_metadata: ~
+          - add_docker_metadata: ~
+          - add_kubernetes_metadata: ~
+          
+      # Volume mounts
+      extraVolumes:
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+        - name: varlog
+          hostPath:
+            path: /var/log
+            
+      extraVolumeMounts:
+        - name: varlibdockercontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+        - name: varlog
+          mountPath: /var/log
+          readOnly: true
+          
+  tags:
+    - logging
+    - filebeat
+
+# Deploy Jaeger for distributed tracing
+- name: Deploy Jaeger
+  kubernetes.core.helm:
+    name: jaeger
+    chart_ref: jaegertracing/jaeger
+    chart_version: "{{ jaeger_chart_version }}"
+    release_namespace: "{{ logging_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+    values:
+      # Use all-in-one deployment for POC
+      allInOne:
+        enabled: true
+        image: jaegertracing/all-in-one:{{ jaeger_version }}
+        
+        # Resource limits for POC environment
+        resources:
+          requests:
+            cpu: "{{ jaeger_cpu_request }}"
+            memory: "{{ jaeger_memory_request }}"
+          limits:
+            cpu: "{{ jaeger_cpu_limit }}"
+            memory: "{{ jaeger_memory_limit }}"
+            
+        # Storage configuration
+        options:
+          memory:
+            max-traces: "{{ jaeger_max_traces }}"
+            
+        # Service configuration
+        service:
+          type: ClusterIP
+          
+      # Disable individual components (using all-in-one)
+      agent:
+        enabled: false
+      collector:
+        enabled: false
+      query:
+        enabled: false
+        ingress:
+          enabled: "{{ jaeger_ingress_enabled }}"
+          className: kong-external
+          annotations:
+            konghq.com/strip-path: "true"
+            konghq.com/preserve-host: "true"
+          hosts:
+            - host: "{{ jaeger_external_url }}"
+              paths:
+                - path: /
+                  pathType: Prefix
+                  
+  tags:
+    - tracing
+    - jaeger
+
+# Create index patterns in Kibana
+- name: Wait for Kibana to be ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ logging_namespace }}"
+    label_selectors:
+      - app=kibana
+    wait: true
+    wait_condition:
+      type: Ready
+      status: "True"
+    wait_timeout: 300
+    kubeconfig: "{{ kubeconfig_path }}"
+  tags:
+    - logging
+    - kibana
+
+- name: Wait for Elasticsearch indices to be created
+  pause:
+    seconds: 60
+  tags:
+    - logging
+    - kibana
+
+# Display access information
+- name: Display logging and tracing access information
+  debug:
+    msg:
+      - "=== Logging and Tracing Deployment Complete ==="
+      - ""
+      - "📊 Kibana (Logs Dashboard):"
+      - "  Internal: http://kibana-kibana.{{ logging_namespace }}.svc.cluster.local:5601"
+      - "  External: {{ 'https://' + kibana_external_url if kibana_ingress_enabled else 'Not configured' }}"
+      - ""
+      - "🔍 Elasticsearch (Search Engine):"
+      - "  Internal: http://elasticsearch-master.{{ logging_namespace }}.svc.cluster.local:9200"
+      - "  External: {{ 'https://' + elasticsearch_external_url if elasticsearch_ingress_enabled else 'Not configured' }}"
+      - ""
+      - "📈 Jaeger (Tracing UI):"
+      - "  Internal: http://jaeger-query.{{ logging_namespace }}.svc.cluster.local:16686"
+      - "  External: {{ 'https://' + jaeger_external_url if jaeger_ingress_enabled else 'Not configured' }}"
+      - ""
+      - "🔧 Configuration:"
+      - "  Namespace: {{ logging_namespace }}"
+      - "  Storage Class: {{ storage_class }}"
+      - "  Log Retention: Based on storage capacity"
+      - "  Trace Retention: {{ jaeger_max_traces }} traces in memory"
+      - ""
+      - "🚀 Getting Started:"
+      - "  1. Access Kibana to create index patterns"
+      - "  2. Configure log dashboards"
+      - "  3. Set up alerting rules"
+      - "  4. Integrate applications with Jaeger for tracing"
+  tags:
+    - logging
+    - tracing
+    - info

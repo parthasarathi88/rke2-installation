@@ -1,0 +1,302 @@
+---
+# Storage Role - Synology CSI Driver and NFS Provisioner
+
+# Deploy Synology CSI Driver first
+- name: Check if Synology CSI driver is already deployed
+  shell: /var/lib/rancher/rke2/bin/kubectl get pods -n synology-csi --no-headers 2>/dev/null | wc -l
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: synology_csi_check
+  ignore_errors: true
+
+- name: Deploy Synology CSI driver using kubectl manifests
+  shell: |
+    /var/lib/rancher/rke2/bin/kubectl apply -f /home/partha/synology-csi/deploy/kubernetes/v1.20/namespace.yml
+    /var/lib/rancher/rke2/bin/kubectl apply -f /home/partha/synology-csi/deploy/kubernetes/v1.20/csi-driver.yml
+    /var/lib/rancher/rke2/bin/kubectl apply -f /home/partha/synology-csi/deploy/kubernetes/v1.20/controller.yml
+    /var/lib/rancher/rke2/bin/kubectl apply -f /home/partha/synology-csi/deploy/kubernetes/v1.20/node.yml
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: synology_deploy_result
+  when: synology_csi_check.stdout | int == 0
+  delegate_to: localhost
+
+- name: Create client-info secret for Synology CSI driver
+  shell: /var/lib/rancher/rke2/bin/kubectl create secret -n synology-csi generic client-info-secret --from-file=/home/partha/synology-csi/config/client-info.yml
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: synology_csi_check.stdout | int == 0
+  delegate_to: localhost
+  ignore_errors: true
+
+- name: Wait for Synology CSI deployment to complete
+  pause:
+    seconds: 30
+  when: synology_csi_check.stdout | int == 0
+
+- name: Apply Synology storage class
+  shell: /var/lib/rancher/rke2/bin/kubectl apply -f /home/partha/synology-csi/storage-class-iscsi.yml
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: synology_csi_check.stdout | int == 0
+  delegate_to: localhost
+
+- name: Verify Synology CSI pods are running
+  shell: /var/lib/rancher/rke2/bin/kubectl get pods -n synology-csi
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: synology_pods_status
+
+- name: Display Synology CSI status
+  debug:
+    msg: |
+      🔍 Synology CSI Driver Status:
+      {{ synology_pods_status.stdout }}
+
+- name: Verify synostorage storage class exists
+  shell: /var/lib/rancher/rke2/bin/kubectl get storageclass synostorage
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: synostorage_check
+  ignore_errors: true
+
+- name: Display storage class status
+  debug:
+    msg: |
+      {% if synostorage_check.rc == 0 %}
+      ✅ synostorage storage class is available
+      {% else %}
+      ❌ synostorage storage class not found
+      {% endif %}
+
+# NFS Provisioner deployment
+- name: Check if NFS provisioner is already installed
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm list -n {{ nfs_namespace }} | grep nfs-subdir-external-provisioner
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: nfs_provisioner_check
+  ignore_errors: true
+
+- name: Add NFS Helm repository
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/
+    /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: nfs_provisioner_check.rc != 0
+
+- name: Create NFS storage namespace
+  shell: /var/lib/rancher/rke2/bin/kubectl create namespace {{ nfs_namespace }} --dry-run=client -o yaml | /var/lib/rancher/rke2/bin/kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: nfs_provisioner_check.rc != 0
+
+- name: Install NFS Subdir External Provisioner
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install nfs-subdir-external-provisioner \
+      nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
+      --namespace {{ nfs_namespace }} \
+      --set nfs.server={{ nfs_server }} \
+      --set nfs.path={{ nfs_path }} \
+      --set storageClass.name={{ nfs_storage_class }} \
+      --set storageClass.defaultClass=true \
+      --set storageClass.allowVolumeExpansion=true \
+      --set storageClass.reclaimPolicy=Retain \
+      --set storageClass.archiveOnDelete=true \
+      --set resources.limits.cpu=200m \
+      --set resources.limits.memory=256Mi \
+      --set resources.requests.cpu=100m \
+      --set resources.requests.memory=128Mi \
+      --wait --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: nfs_provisioner_check.rc != 0
+
+- name: Skip NFS provisioner installation (already exists)
+  debug:
+    msg: "NFS provisioner already installed, skipping installation"
+  when: nfs_provisioner_check.rc == 0
+
+- name: Verify NFS storage class
+  shell: /var/lib/rancher/rke2/bin/kubectl get storageclass {{ nfs_storage_class }}
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: nfs_sc_check
+  failed_when: nfs_sc_check.rc != 0
+
+- name: Pre-check NFS server connectivity
+  shell: ping -c 3 -W 5 {{ nfs_server }}
+  register: nfs_ping_result
+  ignore_errors: yes
+
+- name: Display NFS connectivity status
+  debug:
+    msg: |
+      🔍 NFS Server Connectivity Check:
+      {% if nfs_ping_result.rc == 0 %}
+      ✅ NFS Server {{ nfs_server }} is reachable
+      {% else %}
+      ⚠️ NFS Server {{ nfs_server }} ping failed - proceeding anyway
+      (This might be due to firewall settings)
+      {% endif %}
+
+- name: Check NFS exports (if server is reachable)
+  shell: showmount -e {{ nfs_server }}
+  register: nfs_exports
+  ignore_errors: yes
+  when: nfs_ping_result.rc == 0
+
+- name: Display NFS exports
+  debug:
+    msg: |
+      📂 NFS Exports Available:
+      {{ nfs_exports.stdout | default('Unable to retrieve exports') }}
+  when: nfs_ping_result.rc == 0 and nfs_exports is defined
+
+- name: Create test PVC to verify NFS functionality
+  copy:
+    content: |
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: nfs-test-pvc
+        namespace: default
+      spec:
+        accessModes:
+          - ReadWriteMany
+        resources:
+          requests:
+            storage: 1Gi
+        storageClassName: {{ nfs_storage_class }}
+    dest: /tmp/nfs-test-pvc.yaml
+    mode: '0644'
+
+- name: Check NFS provisioner pod status
+  shell: /var/lib/rancher/rke2/bin/kubectl get pods -n kube-system -l app=nfs-subdir-external-provisioner --no-headers
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: provisioner_status
+  ignore_errors: yes
+
+- name: Display NFS provisioner status
+  debug:
+    msg: |
+      🔧 NFS Provisioner Status:
+      {{ provisioner_status.stdout | default('No provisioner pods found') }}
+      
+      {% if 'Running' in provisioner_status.stdout | default('') %}
+      ✅ NFS provisioner is running
+      {% else %}
+      ⚠️ NFS provisioner may not be ready yet
+      {% endif %}
+
+- name: Wait for NFS provisioner to be ready (if found)
+  shell: /var/lib/rancher/rke2/bin/kubectl wait --for=condition=ready pod -l app=nfs-subdir-external-provisioner -n kube-system --timeout=60s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: provisioner_ready
+  ignore_errors: yes
+  when: "'Running' in provisioner_status.stdout | default('')"
+
+- name: Apply test PVC
+  shell: /var/lib/rancher/rke2/bin/kubectl apply -f /tmp/nfs-test-pvc.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Wait for test PVC to be bound (with extended timeout)
+  shell: /var/lib/rancher/rke2/bin/kubectl wait --for=condition=Bound pvc/nfs-test-pvc -n default --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: pvc_wait_result
+  ignore_errors: yes
+
+- name: Check PVC status if wait timed out
+  shell: /var/lib/rancher/rke2/bin/kubectl get pvc nfs-test-pvc -n default -o yaml
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: pvc_status
+  when: pvc_wait_result.rc != 0
+
+- name: Display PVC troubleshooting info if binding failed
+  debug:
+    msg: |
+      ⚠️ NFS PVC Binding Issue Detected
+      ================================
+      
+      PVC Status: {{ pvc_status.stdout | default('Unknown') }}
+      
+      🔍 Troubleshooting Steps:
+      1. Check NFS server connectivity: ping {{ nfs_server }}
+      2. Verify NFS export: showmount -e {{ nfs_server }}
+      3. Check provisioner logs: kubectl logs -n kube-system -l app=nfs-subdir-external-provisioner
+      4. Verify NFS path exists: {{ nfs_path }}
+      
+      💡 Note: Sometimes PVC binding takes longer than expected.
+      The system will continue and you can verify storage later.
+  when: pvc_wait_result.rc != 0
+
+- name: Retry PVC binding check (manual verification)
+  shell: /var/lib/rancher/rke2/bin/kubectl get pvc nfs-test-pvc -n default --no-headers | awk '{print $2}'
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: pvc_final_status
+  when: pvc_wait_result.rc != 0
+
+- name: Display final PVC status
+  debug:
+    msg: |
+      📋 NFS Storage Verification Results:
+      {% if pvc_wait_result.rc == 0 %}
+      ✅ SUCCESS: Test PVC bound successfully within timeout
+      {% else %}
+      ⚠️ TIMEOUT: PVC Status = {{ pvc_final_status.stdout | default('Unknown') }}
+      {% if pvc_final_status.stdout | default('') == 'Bound' %}
+      ✅ GOOD NEWS: PVC is actually Bound now (timing issue resolved)
+      {% else %}
+      ❌ PVC still not bound - manual verification needed
+      {% endif %}
+      {% endif %}
+      
+      🎯 Continuing with deployment...
+
+- name: Delete test PVC
+  shell: /var/lib/rancher/rke2/bin/kubectl delete -f /tmp/nfs-test-pvc.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Clean up test files
+  file:
+    path: /tmp/nfs-test-pvc.yaml
+    state: absent
+
+- name: Storage deployment summary
+  debug:
+    msg: |
+      
+      ✅ STORAGE CONFIGURATION COMPLETE
+      ================================
+      
+      📦 Components Deployed:
+      • NFS Subdir External Provisioner
+      • Storage Class: {{ nfs_storage_class }}
+      • NFS Server: {{ nfs_server }}:{{ nfs_path }}
+      
+      📋 Storage Status:
+      {% if pvc_wait_result.rc == 0 %}
+      ✅ NFS storage verified and working
+      {% elif pvc_final_status.stdout | default('') == 'Bound' %}
+      ✅ NFS storage working (resolved after initial timeout)
+      {% else %}
+      ⚠️ NFS storage needs manual verification
+      {% endif %}
+      
+      🔧 Verification Commands:
+      • kubectl get storageclass
+      • kubectl get pods -n kube-system -l app=nfs-subdir-external-provisioner
+      • kubectl get pv,pvc --all-namespaces
+      
+      🚀 Proceeding to next deployment phase...

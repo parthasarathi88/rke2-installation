@@ -1,0 +1,17 @@
+---
+# MetalLB Configuration
+metallb_ip_pool: "192.168.1.201-192.168.1.210"
+metallb_api_server_ip: "192.168.1.200"
+metallb_namespace: "metallb-system"
+
+# cert-manager Configuration
+certmanager_version: "v1.13.3"
+certmanager_namespace: "cert-manager"
+
+# Kong Configuration
+kong_version: "3.4"
+kong_internal_namespace: "kong-internal"
+kong_external_namespace: "kong-external"
+
+# RKE2 Master Node IP (for API server endpoints)
+rke2_master_ip: "192.168.1.141"

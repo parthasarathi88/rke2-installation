@@ -1,0 +1,110 @@
+---
+# Prerequisites Role - System preparation and iSCSI installation
+- name: Install required packages
+  shell: yum install -y curl wget tar iptables policycoreutils-python nfs-utils
+  args:
+    creates: /usr/bin/curl
+
+- name: Install iSCSI initiator and multipath packages
+  shell: yum install -y iscsi-initiator-utils device-mapper-multipath
+  args:
+    creates: /usr/sbin/iscsiadm
+
+- name: Generate unique IQN for iSCSI initiator
+  shell: |
+    if [ ! -f /etc/iscsi/initiatorname.iscsi ]; then
+      echo "InitiatorName=$(iscsi-iname)" > /etc/iscsi/initiatorname.iscsi
+    fi
+  args:
+    creates: /etc/iscsi/initiatorname.iscsi
+
+- name: Configure iSCSI initiator settings for better performance and reliability
+  lineinfile:
+    path: /etc/iscsi/iscsid.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    backup: yes
+  loop:
+    - { regexp: '^#?node.startup', line: 'node.startup = automatic' }
+    - { regexp: '^#?node.leading_login', line: 'node.leading_login = Yes' }
+    - { regexp: '^#?node.conn\[0\].timeo.noop_out_timeout', line: 'node.conn[0].timeo.noop_out_timeout = 5' }
+    - { regexp: '^#?node.conn\[0\].timeo.noop_out_interval', line: 'node.conn[0].timeo.noop_out_interval = 5' }
+    - { regexp: '^#?node.session.timeo.replacement_timeout', line: 'node.session.timeo.replacement_timeout = 120' }
+    - { regexp: '^#?node.conn\[0\].timeo.login_timeout', line: 'node.conn[0].timeo.login_timeout = 15' }
+    - { regexp: '^#?node.conn\[0\].timeo.logout_timeout', line: 'node.conn[0].timeo.logout_timeout = 15' }
+
+- name: Enable and start iSCSI daemon service
+  systemd:
+    name: iscsid
+    enabled: yes
+    state: started
+
+- name: Enable and start iSCSI service
+  systemd:
+    name: iscsi
+    enabled: yes
+    state: started
+  ignore_errors: yes
+
+- name: Configure multipath daemon
+  copy:
+    content: |
+      # Basic multipath configuration for iSCSI
+      defaults {
+          user_friendly_names yes
+          find_multipaths yes
+          enable_foreign "^$"
+      }
+      
+      blacklist {
+          devnode "^(ram|raw|loop|fd|md|dm-|sr|scd|st)[0-9]*"
+          devnode "^hd[a-z]"
+          devnode "^cciss.*"
+      }
+    dest: /etc/multipath.conf
+    backup: yes
+    mode: '0644'
+
+- name: Enable and start multipath daemon
+  systemd:
+    name: multipathd
+    enabled: yes
+    state: started
+  ignore_errors: yes
+
+- name: Disable firewalld (RKE2 manages its own firewall rules)
+  systemd:
+    name: firewalld
+    state: stopped
+    enabled: no
+  ignore_errors: yes
+
+- name: Disable SELinux temporarily
+  shell: |
+    setenforce 0 || true
+    sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config || true
+
+- name: Load required kernel modules
+  shell: |
+    modprobe overlay || true
+    modprobe br_netfilter || true
+
+- name: Persist kernel modules
+  copy:
+    content: |
+      overlay
+      br_netfilter
+    dest: /etc/modules-load.d/k8s.conf
+    mode: '0644'
+
+- name: Configure sysctl parameters for Kubernetes
+  copy:
+    content: |
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward = 1
+    dest: /etc/sysctl.d/k8s.conf
+    mode: '0644'
+
+- name: Apply sysctl parameters
+  shell: sysctl --system

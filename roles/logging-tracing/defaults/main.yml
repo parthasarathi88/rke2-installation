@@ -1,0 +1,76 @@
+---
+# Logging and Tracing Role - Default Variables
+# ============================================
+# POC-optimized configuration for 4GB RAM nodes with synostorage
+
+# General Configuration
+logging_namespace: "logging-tracing"
+kubeconfig_path: "/etc/rancher/rke2/rke2.yaml"
+storage_class: "synostorage"
+cluster_name: "rke2-poc"
+
+# Helm Chart Versions
+elasticsearch_chart_version: "8.5.1"
+kibana_chart_version: "8.5.1"
+logstash_chart_version: "8.5.1"
+filebeat_chart_version: "8.5.1"
+jaeger_chart_version: "0.71.0"
+jaeger_version: "1.46"
+
+# Elasticsearch Configuration
+elasticsearch_replicas: 1
+elasticsearch_min_master_nodes: 1
+elasticsearch_cpu_request: "500m"
+elasticsearch_cpu_limit: "1000m"
+elasticsearch_memory_request: "1Gi"
+elasticsearch_memory_limit: "2Gi"
+elasticsearch_storage_size: "2Gi"
+elasticsearch_java_opts: "-Xmx1g -Xms1g"
+
+# Elasticsearch External Access
+elasticsearch_ingress_enabled: true
+elasticsearch_external_url: "elasticsearch.dellpc.in"
+
+# Kibana Configuration
+kibana_cpu_request: "200m"
+kibana_cpu_limit: "500m"
+kibana_memory_request: "512Mi"
+kibana_memory_limit: "1Gi"
+kibana_encryption_key: "a7f3a4b2c8d9e1f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6"
+
+# Kibana External Access
+kibana_ingress_enabled: true
+kibana_external_url: "kibana.dellpc.in"
+
+# Logstash Configuration
+logstash_replicas: 1
+logstash_cpu_request: "200m"
+logstash_cpu_limit: "500m"
+logstash_memory_request: "512Mi"
+logstash_memory_limit: "1Gi"
+
+# Filebeat Configuration
+filebeat_cpu_request: "100m"
+filebeat_cpu_limit: "200m"
+filebeat_memory_request: "100Mi"
+filebeat_memory_limit: "200Mi"
+
+# Jaeger Configuration
+jaeger_cpu_request: "200m"
+jaeger_cpu_limit: "500m"
+jaeger_memory_request: "256Mi"
+jaeger_memory_limit: "512Mi"
+jaeger_max_traces: 50000
+
+# Jaeger External Access
+jaeger_ingress_enabled: true
+jaeger_external_url: "jaeger.dellpc.in"
+
+# Resource Summary for 4GB Nodes
+# ===============================
+# Elasticsearch: 1-2Gi memory, 0.5-1 CPU
+# Kibana: 512Mi-1Gi memory, 0.2-0.5 CPU
+# Logstash: 512Mi-1Gi memory, 0.2-0.5 CPU
+# Filebeat: 100-200Mi memory, 0.1-0.2 CPU (per node)
+# Jaeger: 256-512Mi memory, 0.2-0.5 CPU
+# Total: ~3-5Gi memory, ~1.2-2.7 CPU across cluster

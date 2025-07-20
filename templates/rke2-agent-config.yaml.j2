@@ -1,0 +1,12 @@
+# RKE2 Agent Configuration
+server: {{ server_url }}
+token: {{ token }}
+
+# Performance tuning for 6GB nodes
+kubelet-arg:
+  - "--max-pods=110"
+  - "--kube-reserved=cpu=200m,memory=300Mi"
+  - "--system-reserved=cpu=200m,memory=200Mi"
+  - "--eviction-hard=memory.available<500Mi"
+  - "--image-gc-high-threshold=85"
+  - "--image-gc-low-threshold=80"

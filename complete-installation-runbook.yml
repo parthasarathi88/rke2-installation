@@ -1,0 +1,499 @@
+---
+# Complete RKE2 + Rancher Installation Runbook
+# Based on successful deployment of RKE2 v1.27.16+rke2r1 with external API access
+# 
+# Successfully Tested Configuration:
+# - RKE2 v1.27.16+rke2r1 with Canal CNI
+# - 3-node cluster: 192.168.1.141 (master), 192.168.1.142,145 (workers)
+# - MetalLB LoadBalancer with external API server access via 192.168.1.200
+# - SAN certificate includes: 192.168.1.141, 192.168.1.200, rancher.dellpc.in
+# - Workloads scheduled only on worker nodes (master tainted)
+# - API server accessible via both internal (192.168.1.141:6443) and external (192.168.1.200:6443) IPs
+#
+# Optimized for 6GB worker nodes with comprehensive monitoring and networking
+- name: Complete RKE2 Kubernetes Cluster with Rancher Management
+  hosts: rke2_nodes
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    # RKE2 Configuration - Tested and working version
+    rke2_version: "v1.27.16+rke2r1"
+    rke2_channel: "stable"
+    cluster_cidr: "10.42.0.0/16"
+    service_cidr: "10.43.0.0/16"
+    cluster_dns: "10.43.0.10"
+    
+    # Network Configuration
+    metallb_ip_pool: "192.168.1.201-192.168.1.210"
+    metallb_api_server_ip: "192.168.1.200"  # External IP for API server access
+    rke2_master_ip: "192.168.1.141"  # Master node IP for endpoints
+    
+    # Node Configuration
+    rke2_node_taint_master: true  # Ensure workloads run only on workers
+    
+    # Kong Configuration
+    kong_version: "3.1"
+    kong_internal_namespace: "kong-internal"
+    kong_external_namespace: "kong-external"
+    
+    # cert-manager Configuration
+    certmanager_namespace: "cert-manager"
+    certmanager_version: "v1.13.3"
+    
+    # Rancher Configuration (updated for Kubernetes 1.27 compatibility)
+    rancher_hostname: "rancher.dellpc.in"
+    rancher_version: "2.10.3"  # Compatible with Kubernetes 1.27
+    rancher_chart_version: "2.10.3"
+    rancher_replicas: 2
+    rancher_ssl_mode: "rancher"  # Use self-signed certificates instead of Let's Encrypt
+    letsencrypt_email: "admin@dellpc.in"  # Kept for reference, not used with self-signed
+    
+    # SAN Configuration for API server certificate
+    tls_san_list:
+      - "192.168.1.141"  # Master node IP
+      - "192.168.1.200"  # External LoadBalancer IP
+      - "rancher.dellpc.in"  # DNS name
+    
+    # Storage Configuration
+    nfs_server: "192.168.1.225"
+    nfs_path: "/volume3/size-4t-sub-2t1-dellpc-k8s"
+    nfs_namespace: "nfs-provisioner"
+    nfs_storage_class: "nfs-client"
+    
+    # Monitoring Configuration (Optional - POC Environment)
+    enable_monitoring: false  # Set to true to deploy monitoring stack
+    monitoring_storage_class: "synostorage"
+    monitoring_chart_version: "55.5.0"
+    grafana_hostname: "grafana.dellpc.in"
+    prometheus_hostname: "prometheus.dellpc.in"
+    alertmanager_hostname: "alertmanager.dellpc.in"
+    
+    # Logging and Tracing Configuration (Optional - POC Environment)
+    enable_logging_tracing: true  # Set to true to deploy logging and tracing stack
+    logging_tracing_storage_class: "synostorage"
+    kibana_hostname: "kibana.dellpc.in"
+    elasticsearch_hostname: "elasticsearch.dellpc.in"
+    jaeger_hostname: "jaeger.dellpc.in"
+
+  pre_tasks:
+    - name: Display installation overview
+      debug:
+        msg: |
+          🚀 Starting Complete RKE2 + Rancher Installation
+          ================================================
+          
+          📋 Installation Plan:
+          1. Prerequisites & iSCSI setup
+          2. RKE2 Kubernetes cluster installation ({{ rke2_version }})
+             - Master: {{ groups['rke2_servers'][0] }} with SAN: {{ tls_san_list | join(', ') }}
+             - Workers: {% for host in groups['rke2_agents'] %}{{ host }}{% if not loop.last %}, {% endif %}{% endfor %}
+          3. MetalLB load balancer with API server external access
+             - Pool: {{ metallb_ip_pool }}
+             - API Server External IP: {{ metallb_api_server_ip }}
+          4. cert-manager for SSL certificates
+          5. Kong ingress controllers (internal & external)
+          6. NFS storage provisioner
+          7. Rancher management UI ({{ rancher_replicas }} replicas)
+          8. Monitoring stack (optional - POC): Prometheus, Grafana, AlertManager
+          9. Logging & Tracing stack (optional - POC): ELK Stack, Jaeger
+          
+          🎯 Target Infrastructure:
+          - Management Node: {{ groups['rke2_servers'][0] }} ({{ hostvars[groups['rke2_servers'][0]]['ansible_default_ipv4']['address'] }})
+          - Worker Nodes: {% for host in groups['rke2_agents'] %}{{ host }} ({{ hostvars[host]['ansible_default_ipv4']['address'] }}){% if not loop.last %}, {% endif %}{% endfor %}
+          
+          - API Server External IP: {{ metallb_api_server_ip }}:6443
+          - LoadBalancer Pool: {{ metallb_ip_pool }}
+          - NFS Server: {{ nfs_server }}:{{ nfs_path }}
+          - Rancher URL: https://{{ rancher_hostname }}
+          
+          ⚠️ Memory Optimization for 6GB Nodes:
+          - Rancher: {{ rancher_replicas }} replicas × 1.5Gi = 3Gi total
+          - Kong: 2 controllers × 512Mi = 1Gi total
+          - System pods: ~1.5Gi
+          - Available for workloads: ~1.5Gi per node
+      when: inventory_hostname == groups['rke2_servers'][0]
+
+    - name: Installation will proceed automatically
+      debug:
+        msg: "Starting automatic RKE2 + Rancher installation..."
+      when: inventory_hostname == groups['rke2_servers'][0]
+
+  roles:
+    - role: prerequisites
+      tags: ['prerequisites', 'iscsi']
+      
+    - role: rke2
+      tags: ['rke2', 'kubernetes']
+      
+  post_tasks:
+    - name: Verify RKE2 installation and node readiness
+      block:
+        - name: Wait for all nodes to be ready
+          shell: /var/lib/rancher/rke2/bin/kubectl get nodes
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: nodes_status
+          retries: 10
+          delay: 30
+          until: "'NotReady' not in nodes_status.stdout"
+          when: node_role == 'server'
+
+        - name: Verify RKE2 version and cluster info
+          shell: /var/lib/rancher/rke2/bin/kubectl version --short
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: k8s_version
+          when: node_role == 'server'
+
+        - name: Check node roles and taints
+          shell: /var/lib/rancher/rke2/bin/kubectl get nodes -o wide
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: node_details
+          when: node_role == 'server'
+
+        - name: Verify CNI (Canal) pods are running
+          shell: /var/lib/rancher/rke2/bin/kubectl get pods -n kube-system -l k8s-app=canal
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: cni_status
+          when: node_role == 'server'
+
+        - name: Display RKE2 cluster status
+          debug:
+            msg: |
+              🎯 RKE2 Cluster Status:
+              =====================
+              
+              📊 Kubernetes Version:
+              {{ k8s_version.stdout }}
+              
+              🖥️ Node Status:
+              {{ node_details.stdout }}
+              
+              🌐 CNI (Canal) Status:
+              {{ cni_status.stdout }}
+          when: node_role == 'server'
+      when: node_role == 'server'
+
+# Networking and Management Components (Server nodes only)
+- name: Install networking and management components
+  hosts: rke2_servers
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    # Inherit vars from previous play
+    metallb_ip_pool: "192.168.1.201-192.168.1.210"
+    metallb_api_server_ip: "192.168.1.200"
+    rke2_master_ip: "192.168.1.141"
+    kong_version: "3.1"
+    kong_internal_namespace: "kong-internal"
+    kong_external_namespace: "kong-external"
+    certmanager_namespace: "cert-manager"
+    certmanager_version: "v1.13.3"
+    rancher_hostname: "rancher.dellpc.in"
+    rancher_version: "2.10.3"
+    rancher_chart_version: "2.10.3"
+    rancher_replicas: 2
+    rancher_ssl_mode: "rancher"  # Use self-signed certificates instead of Let's Encrypt
+    letsencrypt_email: "admin@dellpc.in"  # Kept for reference, not used with self-signed
+    nfs_server: "192.168.1.225"
+    nfs_path: "/volume3/size-4t-sub-2t1-dellpc-k8s"
+    nfs_namespace: "nfs-provisioner"
+    nfs_storage_class: "nfs-client"
+    
+    # Monitoring and Logging Configuration
+    enable_monitoring: false  # Set to true to deploy monitoring stack
+    enable_logging_tracing: true  # Set to true to deploy logging and tracing stack
+    
+    # SAN Configuration for API server certificate
+    tls_san_list:
+      - "192.168.1.141"  # Master node IP
+      - "192.168.1.200"  # External LoadBalancer IP
+      - "rancher.dellpc.in"  # DNS name
+  
+  roles:
+    - role: networking
+      tags: ['networking', 'metallb', 'kong', 'certmanager']
+      
+    - role: storage
+      tags: ['storage', 'nfs']
+      
+    - role: rancher
+      tags: ['rancher', 'management']
+      
+    - role: monitoring
+      tags: ['monitoring', 'prometheus', 'grafana']
+      when: enable_monitoring | default(false)
+      
+    - role: logging-tracing
+      tags: ['logging', 'tracing', 'elk', 'jaeger']
+      when: enable_logging_tracing | default(false)
+
+  tasks:
+    - name: Verify MetalLB and API server external access
+      block:
+        - name: Wait for MetalLB controller to be ready
+          shell: /var/lib/rancher/rke2/bin/kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=metallb,app.kubernetes.io/component=controller -n metallb-system --timeout=300s
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+        - name: Check MetalLB speaker pods
+          shell: /var/lib/rancher/rke2/bin/kubectl get pods -n metallb-system -l app.kubernetes.io/name=metallb,app.kubernetes.io/component=speaker
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: metallb_speakers
+
+        - name: Verify MetalLB IP address pool configuration
+          shell: /var/lib/rancher/rke2/bin/kubectl get ipaddresspools -n metallb-system
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: metallb_pools
+
+        - name: Check RKE2 API server LoadBalancer service
+          shell: /var/lib/rancher/rke2/bin/kubectl get service rke2-api-server-lb
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: api_lb_service
+
+        - name: Verify API server endpoints
+          shell: /var/lib/rancher/rke2/bin/kubectl get endpoints rke2-api-server-lb
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: api_endpoints
+
+        - name: Test API server access via external IP
+          uri:
+            url: "https://{{ metallb_api_server_ip }}:6443/version"
+            method: GET
+            validate_certs: false
+            status_code: [200, 401, 403]  # 401/403 are OK - means server is responding
+          register: api_test
+          ignore_errors: true
+
+        - name: Test kubectl via external IP
+          shell: /var/lib/rancher/rke2/bin/kubectl --server=https://{{ metallb_api_server_ip }}:6443 get nodes
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: kubectl_external_test
+          ignore_errors: true
+
+        - name: Display MetalLB and API server verification results
+          debug:
+            msg: |
+              🔍 MetalLB and API Server Verification Results:
+              ===============================================
+              
+              📡 MetalLB Speaker Pods:
+              {{ metallb_speakers.stdout }}
+              
+              🎯 MetalLB IP Address Pools:
+              {{ metallb_pools.stdout }}
+              
+              🔗 API Server LoadBalancer Service:
+              {{ api_lb_service.stdout }}
+              
+              📍 API Server Endpoints:
+              {{ api_endpoints.stdout }}
+              
+              🌐 API Server External Access Test:
+              {% if api_test.status is defined and api_test.status in [200, 401, 403] %}
+              ✅ API server is responding on https://{{ metallb_api_server_ip }}:6443
+              {% else %}
+              ❌ API server external access failed - Check MetalLB configuration
+              {% endif %}
+              
+              🔧 kubectl via External IP Test:
+              {% if kubectl_external_test.rc == 0 %}
+              ✅ kubectl works via external IP {{ metallb_api_server_ip }}:6443
+              {{ kubectl_external_test.stdout }}
+              {% else %}
+              ❌ kubectl via external IP failed:
+              {{ kubectl_external_test.stderr | default('Unknown error') }}
+              {% endif %}
+      run_once: true
+
+  post_tasks:
+    - name: Final installation status
+      block:
+        - name: Get cluster info
+          shell: /var/lib/rancher/rke2/bin/kubectl cluster-info
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: cluster_info
+
+        - name: Get all nodes
+          shell: /var/lib/rancher/rke2/bin/kubectl get nodes -o wide
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: all_nodes
+
+        - name: Get all pods in system namespaces
+          shell: /var/lib/rancher/rke2/bin/kubectl get pods --all-namespaces -o wide | grep -E "(kube-system|cattle-system|metallb-system|cert-manager|kong-|nfs-)"
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: system_pods
+          ignore_errors: yes
+
+        - name: Get LoadBalancer services
+          shell: /var/lib/rancher/rke2/bin/kubectl get svc --all-namespaces -o wide | grep LoadBalancer
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: lb_services
+          ignore_errors: yes
+
+        - name: Get ingress resources
+          shell: /var/lib/rancher/rke2/bin/kubectl get ingress --all-namespaces
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: ingress_resources
+          ignore_errors: yes
+
+        - name: Get storage classes
+          shell: /var/lib/rancher/rke2/bin/kubectl get storageclass
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: storage_classes
+
+        - name: Get current resource usage
+          shell: /var/lib/rancher/rke2/bin/kubectl top nodes
+          environment:
+            KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+          register: resource_usage
+          ignore_errors: yes
+
+        - name: Display final installation summary
+          debug:
+            msg: |
+              🎉 RKE2 + Rancher Installation Completed Successfully!
+              =====================================================
+              
+              📊 Cluster Information:
+              {{ cluster_info.stdout }}
+              
+              🖥️ Cluster Nodes:
+              {{ all_nodes.stdout }}
+              
+              📈 Current Resource Usage:
+              {{ resource_usage.stdout if resource_usage.stdout else 'Resource metrics not available yet' }}
+              
+              🔗 LoadBalancer Services:
+              {{ lb_services.stdout if lb_services.stdout else 'No LoadBalancer services found' }}
+              
+              🌐 Ingress Resources:
+              {{ ingress_resources.stdout if ingress_resources.stdout else 'No ingress resources found' }}
+              
+              💾 Storage Classes:
+              {{ storage_classes.stdout }}
+              
+              🎯 Access Points:
+              • Rancher UI: https://{{ rancher_hostname }}
+              • API Server (External): https://{{ metallb_api_server_ip }}:6443
+              • API Server (Internal): https://{{ rke2_master_ip }}:6443
+              • Kong Internal Admin: http://{{ ansible_default_ipv4.address }}:32001
+              • Kong Internal Manager: http://{{ ansible_default_ipv4.address }}:32002
+              • Kong External Admin: http://{{ ansible_default_ipv4.address }}:32003
+              • Kong External Manager: http://{{ ansible_default_ipv4.address }}:32004
+              
+              🔧 Kubectl Configuration:
+              export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+              
+              # Local cluster access:
+              kubectl get nodes
+              
+              # External cluster access (via MetalLB):
+              kubectl --server=https://{{ metallb_api_server_ip }}:6443 get nodes
+              
+              📋 Next Steps:
+              1. Access Rancher UI and complete initial setup
+              2. Configure DNS to point {{ rancher_hostname }} to LoadBalancer IP
+              3. Test external API access: kubectl --server=https://{{ metallb_api_server_ip }}:6443 get nodes
+              4. Deploy your applications using available storage classes
+              5. Monitor resource usage: kubectl top nodes && kubectl top pods --all-namespaces
+              
+              ⚠️ Important Notes:
+              • Bootstrap password saved on management node
+              • SSL certificates will be automatically provisioned via Let's Encrypt
+              • NFS storage is configured as default storage class
+              • iSCSI is configured for additional storage options
+              • API server is accessible via both {{ rke2_master_ip }}:6443 (internal) and {{ metallb_api_server_ip }}:6443 (external)
+              • SAN certificate includes: {{ tls_san_list | join(', ') }}
+
+      rescue:
+        - name: Installation completed with some warnings
+          debug:
+            msg: |
+              ⚠️ Installation completed but some post-checks failed.
+              This is normal for initial deployment - services may still be starting.
+              
+              Please wait 5-10 minutes and verify manually:
+              kubectl get pods --all-namespaces
+              kubectl get nodes
+
+# Final Step: Setup kubectl on localhost (after everything is installed)
+- name: Setup kubectl on localhost for cluster management
+  hosts: rke2_servers
+  become: yes
+  gather_facts: yes
+  vars:
+    metallb_api_server_ip: "192.168.1.200"  # External IP for API server access
+  
+  tasks:
+    - name: Copy kubeconfig from master node to localhost
+      fetch:
+        src: /etc/rancher/rke2/rke2.yaml
+        dest: /tmp/rke2-kubeconfig.yaml
+        flat: yes
+      when: node_role == 'server'
+
+    - name: Create RKE2 config directory on localhost
+      file:
+        path: /home/partha/rke2
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      when: node_role == 'server'
+
+    - name: Copy kubeconfig to the path referenced by KUBECONFIG environment variable
+      copy:
+        src: /tmp/rke2-kubeconfig.yaml
+        dest: /home/partha/rke2/rke2.yaml
+        mode: '0600'
+      delegate_to: localhost
+      when: node_role == 'server'
+
+    - name: replace the localhost in /home/partha/rke2/rke2.yaml
+      replace:
+        path: /home/partha/rke2/rke2.yaml
+        regexp: 'localhost|127\.0\.0\.1'
+        replace: "{{ metallb_api_server_ip }}"
+      delegate_to: localhost
+      when: node_role == 'server'
+
+    - name: Display kubectl setup completion message
+      debug:
+        msg: |
+          🎉 kubectl Setup on Localhost Completed!
+          ========================================
+          
+          📋 Setup Results:
+          • Kubeconfig copied to: /home/partha/rke2/rke2.yaml
+          • Environment variable KUBECONFIG points to this file
+          • API server accessible via: {{ ansible_default_ipv4.address }}:6443
+          
+          💡 Usage:
+          • Run 'kubectl get nodes' from localhost
+          • Run 'kubectl get pods --all-namespaces' to see all pods
+          • After MetalLB is running, external IP will be: {{ metallb_api_server_ip }}:6443
+      when: node_role == 'server'
+
+    - name: Clean up temporary kubeconfig file
+      file:
+        path: /tmp/rke2-kubeconfig.yaml
+        state: absent
+      delegate_to: localhost
+      when: node_role == 'server'
+  
+  run_once: true

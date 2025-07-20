@@ -1,0 +1,300 @@
+---
+# Networking Role - MetalLB, cert-manager, Kong
+- name: Install Helm
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+    echo 'export PATH=/usr/local/bin:$PATH' >> /root/.bashrc
+  args:
+    creates: /usr/local/bin/helm
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Add Helm repositories
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm repo add metallb https://metallb.github.io/metallb
+    /usr/local/bin/helm repo add jetstack https://charts.jetstack.io
+    /usr/local/bin/helm repo add kong https://charts.konghq.com
+    /usr/local/bin/helm repo add rancher-stable https://releases.rancher.com/server-charts/stable
+    /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+# MetalLB Installation
+- name: Check if MetalLB is already installed
+  shell: /var/lib/rancher/rke2/bin/kubectl get namespace metallb-system
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: metallb_namespace_check
+  ignore_errors: true
+
+- name: Install MetalLB using Helm
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install metallb metallb/metallb \
+      --namespace metallb-system \
+      --create-namespace \
+      --wait --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: metallb_namespace_check.rc != 0
+
+- name: Generate MetalLB complete setup configuration
+  template:
+    src: metallb-complete-setup.yaml.j2
+    dest: /tmp/metallb-complete-setup.yaml
+    mode: '0644'
+  when: metallb_namespace_check.rc != 0
+
+- name: Apply MetalLB complete configuration
+  shell: /var/lib/rancher/rke2/bin/kubectl apply -f /tmp/metallb-complete-setup.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: metallb_namespace_check.rc != 0
+
+- name: Skip MetalLB installation (already exists)
+  debug:
+    msg: "MetalLB namespace already exists, skipping MetalLB installation"
+  when: metallb_namespace_check.rc == 0
+
+# cert-manager Installation
+- name: Check if cert-manager is already installed
+  shell: /var/lib/rancher/rke2/bin/kubectl get namespace cert-manager
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: certmanager_namespace_check
+  ignore_errors: true
+
+- name: Install cert-manager CRDs
+  shell: /var/lib/rancher/rke2/bin/kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/{{ certmanager_version }}/cert-manager.crds.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: certmanager_namespace_check.rc != 0
+
+- name: Install cert-manager using Helm
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install cert-manager jetstack/cert-manager \
+      --namespace {{ certmanager_namespace }} \
+      --create-namespace \
+      --version {{ certmanager_version }} \
+      --wait --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: certmanager_namespace_check.rc != 0
+
+- name: Skip cert-manager installation (already exists)
+  debug:
+    msg: "cert-manager namespace already exists, skipping cert-manager installation"
+  when: certmanager_namespace_check.rc == 0
+
+# Kong Installation
+- name: Create Kong Internal namespace
+  shell: /var/lib/rancher/rke2/bin/kubectl create namespace {{ kong_internal_namespace }} --dry-run=client -o yaml | /var/lib/rancher/rke2/bin/kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Create Kong External namespace
+  shell: /var/lib/rancher/rke2/bin/kubectl create namespace {{ kong_external_namespace }} --dry-run=client -o yaml | /var/lib/rancher/rke2/bin/kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Check if Kong Internal is already installed
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm list -n {{ kong_internal_namespace }} | grep kong-internal
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: kong_internal_check
+  ignore_errors: true
+
+- name: Check if Kong External is already installed
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm list -n {{ kong_external_namespace }} | grep kong-external
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: kong_external_check
+  ignore_errors: true
+
+- name: Create Kong Internal values file
+  copy:
+    content: |
+      fullnameOverride: "kong-internal"
+      # Force DB-less mode and IPv4
+      env:
+        database: "off"
+        proxy_listen: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+        admin_listen: "0.0.0.0:8001, 0.0.0.0:8444 ssl"
+        status_listen: "0.0.0.0:8100"
+        stream_listen: "off"
+        nginx_daemon: "off"
+      # Configure ingress controller properly
+      ingressController:
+        enabled: true
+        ingressClass: kong-internal
+        env:
+          kong_admin_url: http://localhost:8001
+          kong_admin_tls_skip_verify: true
+          publish_service: {{ kong_internal_namespace }}/kong-internal-kong-proxy
+      # Add resource limits for OOM prevention
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      # Security context
+      podSecurityContext:
+        fsGroup: 1000
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+      # Proxy service configuration
+      proxy:
+        enabled: true
+        type: NodePort
+        http:
+          enabled: true
+          servicePort: 80
+          containerPort: 8000
+          nodePort: 30080
+        tls:
+          enabled: true
+          servicePort: 443
+          containerPort: 8443
+          nodePort: 30443
+      # Admin service configuration
+      admin:
+        enabled: true
+        type: NodePort
+        http:
+          enabled: true
+          servicePort: 8001
+          containerPort: 8001
+          nodePort: 32001
+      # Manager service configuration
+      manager:
+        enabled: true
+        type: NodePort
+        http:
+          enabled: true
+          servicePort: 8002
+          containerPort: 8002
+          nodePort: 32002
+    dest: /tmp/kong-internal-values.yaml
+    mode: '0644'
+
+- name: Install Kong Internal Ingress Controller
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install kong-internal kong/kong \
+      --namespace {{ kong_internal_namespace }} \
+      --values /tmp/kong-internal-values.yaml \
+      --wait --timeout=600s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: kong_internal_check.rc != 0
+
+- name: Create Kong External values file
+  copy:
+    content: |
+      fullnameOverride: "kong-external"
+      # Force DB-less mode and IPv4
+      env:
+        database: "off"
+        proxy_listen: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+        admin_listen: "0.0.0.0:8001, 0.0.0.0:8444 ssl"
+        status_listen: "0.0.0.0:8100"
+        stream_listen: "off"
+        nginx_daemon: "off"
+      # Configure ingress controller properly
+      ingressController:
+        enabled: true
+        ingressClass: kong-external
+        env:
+          kong_admin_url: http://localhost:8001
+          kong_admin_tls_skip_verify: true
+          publish_service: {{ kong_external_namespace }}/kong-external-kong-proxy
+      # Add resource limits for OOM prevention
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      # Security context
+      podSecurityContext:
+        fsGroup: 1000
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+      # Proxy service configuration with LoadBalancer
+      proxy:
+        enabled: true
+        type: LoadBalancer
+        annotations:
+          metallb.universe.tf/address-pool: default-pool
+        http:
+          enabled: true
+          servicePort: 80
+          containerPort: 8000
+        tls:
+          enabled: true
+          servicePort: 443
+          containerPort: 8443
+      # Admin service configuration
+      admin:
+        enabled: true
+        type: NodePort
+        http:
+          enabled: true
+          servicePort: 8001
+          containerPort: 8001
+          nodePort: 32003
+      # Manager service configuration
+      manager:
+        enabled: true
+        type: NodePort
+        http:
+          enabled: true
+          servicePort: 8002
+          containerPort: 8002
+          nodePort: 32004
+    dest: /tmp/kong-external-values.yaml
+    mode: '0644'
+
+- name: Install Kong External Ingress Controller
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install kong-external kong/kong \
+      --namespace {{ kong_external_namespace }} \
+      --values /tmp/kong-external-values.yaml \
+      --wait --timeout=600s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: kong_external_check.rc != 0
+
+- name: Skip Kong installation (already exists)
+  debug:
+    msg: "Kong Internal: {{ 'Installed' if kong_internal_check.rc == 0 else 'Not Installed' }}, Kong External: {{ 'Installed' if kong_external_check.rc == 0 else 'Not Installed' }}"
+
+- name: Wait for Kong pods to be ready
+  shell: /var/lib/rancher/rke2/bin/kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kong -n {{ item }} --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  loop:
+    - "{{ kong_internal_namespace }}"
+    - "{{ kong_external_namespace }}"
+
+- name: Clean up temporary files
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/metallb-complete-setup.yaml
+    - /tmp/kong-internal-values.yaml
+    - /tmp/kong-external-values.yaml

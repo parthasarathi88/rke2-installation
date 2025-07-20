@@ -1,0 +1,38 @@
+---
+# Rancher Role Default Variables
+# ==============================
+
+# Rancher Configuration
+rancher_hostname: "rancher.dellpc.in"
+rancher_version: "2.10.3"
+rancher_chart_version: "2.10.3"
+rancher_replicas: 2
+letsencrypt_email: "admin@dellpc.in"
+
+# Bootstrap Configuration
+rancher_bootstrap_password: "admin123"
+
+# Resource Configuration (optimized for smaller nodes)
+rancher_resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1.5Gi
+
+# SSL Configuration
+rancher_ssl_mode: "rancher"  # Options: letsEncrypt, rancher, external
+rancher_letsencrypt_environment: "production"  # Options: production, staging
+
+# Ingress Configuration
+rancher_ingress_class: "kong-external"
+
+# Kubernetes Configuration
+kubeconfig_path: "/etc/rancher/rke2/rke2.yaml"
+kubectl_binary: "/var/lib/rancher/rke2/bin/kubectl"
+helm_binary: "/usr/local/bin/helm"
+
+# Repository Configuration
+rancher_helm_repo_name: "rancher-latest"
+rancher_helm_repo_url: "https://releases.rancher.com/server-charts/latest"

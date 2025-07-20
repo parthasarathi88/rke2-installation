@@ -1,0 +1,386 @@
+---
+# Monitoring Role - Optimized for 4GB RAM nodes (POC Environment)
+# Storage: synostorage, Log retention: 1 day, Max volume: 1GB, Polling: 5min
+
+- name: Create monitoring namespace
+  shell: /var/lib/rancher/rke2/bin/kubectl create namespace monitoring --dry-run=client -o yaml | /var/lib/rancher/rke2/bin/kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Add Prometheus Community Helm repository
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Update Helm repositories
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+- name: Check if monitoring stack is already installed
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm list -n monitoring | grep kube-prometheus-stack
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: monitoring_check
+  ignore_errors: true
+
+- name: Create monitoring values file for POC environment
+  copy:
+    content: |
+      # Prometheus Configuration
+      prometheus:
+        prometheusSpec:
+          # Resource limits for 4GB nodes
+          resources:
+            limits:
+              cpu: "{{ prometheus_resources.limits.cpu }}"
+              memory: "{{ prometheus_resources.limits.memory }}"
+            requests:
+              cpu: "{{ prometheus_resources.requests.cpu }}"
+              memory: "{{ prometheus_resources.requests.memory }}"
+          
+          # Storage configuration
+          storageSpec:
+            volumeClaimTemplate:
+              spec:
+                storageClassName: "{{ monitoring_storage_class }}"
+                accessModes: ["ReadWriteOnce"]
+                resources:
+                  requests:
+                    storage: "{{ prometheus_storage_size }}"
+          
+          # Retention policy - 1 day for POC
+          retention: "{{ prometheus_retention }}"
+          retentionSize: "{{ prometheus_retention_size }}"
+          
+          # Scrape interval - 5 minutes for POC
+          scrapeInterval: "{{ scrape_interval }}"
+          evaluationInterval: "{{ evaluation_interval }}"
+          
+          # Node selector for worker nodes
+          nodeSelector:
+            node-role.kubernetes.io/worker: "true"
+          
+          # Disable features not needed for POC
+          enableAdminAPI: false
+          enableRemoteWriteReceiver: false
+          
+          # Security context
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            fsGroup: 65534
+      
+      # AlertManager Configuration
+      alertmanager:
+        alertmanagerSpec:
+          # Resource limits for 4GB nodes
+          resources:
+            limits:
+              cpu: "{{ alertmanager_resources.limits.cpu }}"
+              memory: "{{ alertmanager_resources.limits.memory }}"
+            requests:
+              cpu: "{{ alertmanager_resources.requests.cpu }}"
+              memory: "{{ alertmanager_resources.requests.memory }}"
+          
+          # Storage configuration
+          storage:
+            volumeClaimTemplate:
+              spec:
+                storageClassName: "{{ monitoring_storage_class }}"
+                accessModes: ["ReadWriteOnce"]
+                resources:
+                  requests:
+                    storage: "{{ alertmanager_storage_size }}"
+          
+          # Retention policy - 1 day for POC
+          retention: "{{ alertmanager_retention }}"
+          
+          # Node selector for worker nodes
+          nodeSelector:
+            node-role.kubernetes.io/worker: "true"
+          
+          # Security context
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            fsGroup: 65534
+      
+      # Grafana Configuration
+      grafana:
+        # Resource limits for 4GB nodes
+        resources:
+          limits:
+            cpu: "{{ grafana_resources.limits.cpu }}"
+            memory: "{{ grafana_resources.limits.memory }}"
+          requests:
+            cpu: "{{ grafana_resources.requests.cpu }}"
+            memory: "{{ grafana_resources.requests.memory }}"
+        
+        # Persistence configuration
+        persistence:
+          enabled: true
+          storageClassName: "{{ monitoring_storage_class }}"
+          size: "{{ grafana_storage_size }}"
+          accessModes:
+            - ReadWriteOnce
+        
+        # Node selector for worker nodes
+        nodeSelector:
+          node-role.kubernetes.io/worker: "true"
+        
+        # Admin credentials
+        adminPassword: "{{ grafana_admin_password }}"
+        
+        # Ingress configuration
+        ingress:
+          enabled: true
+          ingressClassName: "{{ ingress_class }}"
+          annotations:
+            kubernetes.io/ingress.class: "{{ ingress_class }}"
+            konghq.com/strip-path: "false"
+            konghq.com/preserve-host: "true"
+          hosts:
+            - "{{ grafana_hostname }}"
+          path: /
+        
+        # Grafana configuration
+        grafana.ini:
+          server:
+            root_url: "https://{{ grafana_hostname }}"
+          security:
+            admin_user: "{{ grafana_admin_user }}"
+            admin_password: "{{ grafana_admin_password }}"
+          auth.anonymous:
+            enabled: false
+        
+        # Security context
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 472
+          fsGroup: 472
+      
+      # Node Exporter Configuration
+      nodeExporter:
+        resources:
+          limits:
+            cpu: "{{ nodeexporter_resources.limits.cpu }}"
+            memory: "{{ nodeexporter_resources.limits.memory }}"
+          requests:
+            cpu: "{{ nodeexporter_resources.requests.cpu }}"
+            memory: "{{ nodeexporter_resources.requests.memory }}"
+      
+      # Kube State Metrics Configuration
+      kubeStateMetrics:
+        resources:
+          limits:
+            cpu: "{{ kubestatemetrics_resources.limits.cpu }}"
+            memory: "{{ kubestatemetrics_resources.limits.memory }}"
+          requests:
+            cpu: "{{ kubestatemetrics_resources.requests.cpu }}"
+            memory: "{{ kubestatemetrics_resources.requests.memory }}"
+      
+      # Prometheus Operator Configuration
+      prometheusOperator:
+        resources:
+          limits:
+            cpu: "{{ prometheusoperator_resources.limits.cpu }}"
+            memory: "{{ prometheusoperator_resources.limits.memory }}"
+          requests:
+            cpu: "{{ prometheusoperator_resources.requests.cpu }}"
+            memory: "{{ prometheusoperator_resources.requests.memory }}"
+        
+        # Node selector for worker nodes
+        nodeSelector:
+          node-role.kubernetes.io/worker: "true"
+      
+      # Global settings
+      global:
+        # Disable components not needed for POC
+        rbac:
+          create: true
+        
+        # Image pull policy
+        imagePullPolicy: IfNotPresent
+      
+      # Disable components for minimal POC setup
+      coreDns:
+        enabled: false
+      kubeApiServer:
+        enabled: true
+      kubeControllerManager:
+        enabled: false
+      kubeScheduler:
+        enabled: false
+      kubeProxy:
+        enabled: false
+      kubelet:
+        enabled: true
+        serviceMonitor:
+          interval: "{{ scrape_interval }}"
+    dest: /tmp/monitoring-values.yaml
+    mode: '0644'
+  when: monitoring_check.rc != 0
+
+- name: Install monitoring stack with POC configuration
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+      --namespace monitoring \
+      --version {{ monitoring_chart_version | default('55.5.0') }} \
+      --values /tmp/monitoring-values.yaml \
+      --wait --timeout=600s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: monitoring_check.rc != 0
+  ignore_errors: true
+  tags:
+    - monitoring
+    - optional
+
+- name: Create Prometheus Ingress for external access
+  copy:
+    content: |
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: prometheus-ingress
+        namespace: monitoring
+        annotations:
+          kubernetes.io/ingress.class: "{{ ingress_class }}"
+          konghq.com/strip-path: "false"
+          konghq.com/preserve-host: "true"
+      spec:
+        ingressClassName: "{{ ingress_class }}"
+        rules:
+        - host: "{{ prometheus_hostname }}"
+          http:
+            paths:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: kube-prometheus-stack-prometheus
+                  port:
+                    number: 9090
+    dest: /tmp/prometheus-ingress.yaml
+    mode: '0644'
+  when: monitoring_check.rc != 0
+
+- name: Apply Prometheus Ingress
+  shell: /var/lib/rancher/rke2/bin/kubectl apply -f /tmp/prometheus-ingress.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: monitoring_check.rc != 0
+
+- name: Create AlertManager Ingress for external access
+  copy:
+    content: |
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: alertmanager-ingress
+        namespace: monitoring
+        annotations:
+          kubernetes.io/ingress.class: "{{ ingress_class }}"
+          konghq.com/strip-path: "false"
+          konghq.com/preserve-host: "true"
+      spec:
+        ingressClassName: "{{ ingress_class }}"
+        rules:
+        - host: "{{ alertmanager_hostname }}"
+          http:
+            paths:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: kube-prometheus-stack-alertmanager
+                  port:
+                    number: 9093
+    dest: /tmp/alertmanager-ingress.yaml
+    mode: '0644'
+  when: monitoring_check.rc != 0
+
+- name: Apply AlertManager Ingress
+  shell: /var/lib/rancher/rke2/bin/kubectl apply -f /tmp/alertmanager-ingress.yaml
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: monitoring_check.rc != 0
+
+- name: Wait for Prometheus pods to be ready
+  shell: /var/lib/rancher/rke2/bin/kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=prometheus -n monitoring --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: monitoring_check.rc != 0
+  ignore_errors: true
+  tags:
+    - monitoring
+    - optional
+
+- name: Wait for Grafana pods to be ready
+  shell: /var/lib/rancher/rke2/bin/kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=grafana -n monitoring --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: monitoring_check.rc != 0
+  ignore_errors: true
+  tags:
+    - monitoring
+    - optional
+
+- name: Wait for AlertManager pods to be ready
+  shell: /var/lib/rancher/rke2/bin/kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=alertmanager -n monitoring --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  when: monitoring_check.rc != 0
+  ignore_errors: true
+  tags:
+    - monitoring
+    - optional
+
+- name: Skip monitoring installation (already exists)
+  debug:
+    msg: "Monitoring stack already installed, skipping installation"
+  when: monitoring_check.rc == 0
+
+- name: Display monitoring access information
+  debug:
+    msg: |
+      📊 MONITORING STACK DEPLOYED SUCCESSFULLY! 📊
+      
+      🎯 Access URLs (Configure DNS):
+      📈 Grafana:      https://{{ grafana_hostname }}      ({{ grafana_admin_user }}/{{ grafana_admin_password }})
+      🔍 Prometheus:   https://{{ prometheus_hostname }}
+      🚨 AlertManager: https://{{ alertmanager_hostname }}
+      
+      ⚙️ POC Configuration Summary:
+      💾 Storage Class: {{ monitoring_storage_class }}
+      📅 Log Retention: {{ prometheus_retention }}
+      💽 Volume Size: {{ prometheus_storage_size }} each (synostorage minimum requirement)
+      ⏱️ Polling Frequency: {{ scrape_interval }}
+      🖥️ Resource Optimized: 4GB RAM nodes
+      
+      📍 External IP: {{ external_loadbalancer_ip }} (Kong LoadBalancer)
+      
+      🔧 DNS Configuration Required:
+      {{ grafana_hostname }}      → {{ external_loadbalancer_ip }}
+      {{ prometheus_hostname }}   → {{ external_loadbalancer_ip }}
+      {{ alertmanager_hostname }} → {{ external_loadbalancer_ip }}
+      
+      ⚠️ NOTE: This is a POC configuration with minimal resource usage!
+  when: monitoring_check.rc != 0
+
+- name: Clean up temporary files
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/monitoring-values.yaml
+    - /tmp/prometheus-ingress.yaml
+    - /tmp/alertmanager-ingress.yaml

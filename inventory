@@ -1,0 +1,76 @@
+# Inventory file for RKE2 installation
+# Setup: 192.168.1.141 as controller/etcd, 142 and 145 as workers
+
+[rke2_nodes]
+mgmt01 ansible_host=192.168.1.141 ansible_user=partha node_role=server
+worker01 ansible_host=192.168.1.142 ansible_user=partha node_role=agent
+worker02 ansible_host=192.168.1.145 ansible_user=partha node_role=agent
+
+[rke2_servers]
+mgmt01 ansible_host=192.168.1.141 ansible_user=partha
+
+[rke2_agents]
+worker01 ansible_host=192.168.1.142 ansible_user=partha
+worker02 ansible_host=192.168.1.145 ansible_user=partha
+
+[rke2_nodes:vars]
+# Common variables for all RKE2 nodes
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+ansible_python_interpreter=/usr/bin/python3
+ansible_host_key_checking=False
+ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+# Optional: Password authentication (not recommended for production)
+# ansible_ssh_pass=your_password
+# ansible_become_pass=your_sudo_password
+
+# RKE2 configuration variables - Using stable v1.27.x for better CentOS 7 compatibility
+rke2_version=v1.27.16+rke2r1
+rke2_channel=stable
+rke2_cluster_name=rke2-cluster
+rke2_cluster_secret=my-cluster-secret
+rke2_token_file=/var/lib/rancher/rke2/server/node-token
+rke2_config_dir=/etc/rancher/rke2
+rke2_data_dir=/var/lib/rancher/rke2
+
+# Cluster networking
+cluster_cidr=10.42.0.0/16
+service_cidr=10.43.0.0/16
+cluster_dns=10.43.0.10
+
+# Rancher configuration
+rancher_hostname=rancher.dellpc.in
+rancher_version=2.6.13
+rancher_chart_version=2.6.13
+rancher_replicas=2
+letsencrypt_email=admin@dellpc.in
+
+# MetalLB configuration
+metallb_ip_pool=192.168.1.200-192.168.1.210
+
+# Kong Ingress Controller configuration
+kong_namespace=kong
+kong_version=3.1
+
+# cert-manager configuration
+certmanager_namespace=cert-manager
+certmanager_version=v1.13.3
+
+# Monitoring configuration (optional - set enable_monitoring=true to deploy)
+enable_monitoring=true
+monitoring_storage_class=synostorage
+monitoring_chart_version=55.5.0
+prometheus_storage_size=1Gi
+grafana_storage_size=1Gi
+alertmanager_storage_size=1Gi
+grafana_hostname=grafana.dellpc.in
+prometheus_hostname=prometheus.dellpc.in
+alertmanager_hostname=alertmanager.dellpc.in
+grafana_admin_user=admin
+grafana_admin_password=admin123
+
+# Storage configuration
+nfs_server=192.168.1.225
+nfs_path=/volume3/size-4t-sub-2t1-dellpc-k8s
+nfs_namespace=nfs-provisioner
+nfs_storage_class=nfs-client

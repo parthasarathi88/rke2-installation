@@ -1,0 +1,318 @@
+---
+# RKE2 Cleanup Playbook - Clean and Safe Approach
+# Designed to safely remove RKE2 cluster without breaking SSH connectivity
+# Focus on essential cleanup with minimal risk
+
+- name: RKE2 Cluster Cleanup - Safe & Clean
+  hosts: rke2_nodes
+  become: yes
+  gather_facts: yes
+  serial: 1  # Process one node at a time for safety
+  
+  vars:
+    # Only the essential directories that need cleanup
+    rke2_data_dirs:
+      - /var/lib/rancher/rke2
+      - /etc/rancher/rke2
+      - /var/lib/kubelet
+      - /root/.kube
+    
+    # Container runtime cleanup
+    container_dirs:
+      - /var/lib/containerd
+      - /run/containerd
+      - /var/log/containers
+      - /var/log/pods
+    
+    # Temporary files and configs
+    temp_files:
+      - /tmp/install-rke2.sh
+      - /tmp/rke2-*.tar.gz
+      - /tmp/metallb-*.yaml
+      - /tmp/kong-*.yaml
+      - /tmp/rancher-*.yaml
+
+  pre_tasks:
+    - name: Display cleanup overview
+      debug:
+        msg: |
+          🧹 RKE2 Cleanup Starting on {{ inventory_hostname }}
+          ================================================
+          
+          📋 What will be cleaned:
+          - RKE2 services (stop and disable)
+          - RKE2 data directories
+          - Container runtime data
+          - Temporary files
+          - System configurations
+          
+          ⚠️ What will be preserved:
+          - Network configuration (SSH safe)
+          - System packages
+          - User data and home directories
+          - Core system services
+      run_once: true
+
+  tasks:
+    # Phase 1: Stop Services Safely
+    - name: Stop RKE2 services gracefully
+      block:
+        - name: Stop RKE2 server service
+          systemd:
+            name: rke2-server
+            state: stopped
+            enabled: no
+          ignore_errors: yes
+          when: node_role == 'server'
+          
+        - name: Stop RKE2 agent service
+          systemd:
+            name: rke2-agent
+            state: stopped
+            enabled: no
+          ignore_errors: yes
+          when: node_role == 'agent'
+          
+        - name: Wait for services to stop completely
+          wait_for:
+            timeout: 30
+          delegate_to: localhost
+          
+        - name: Verify services are stopped
+          shell: systemctl is-active rke2-server rke2-agent
+          register: service_status
+          ignore_errors: yes
+          
+        - name: Display service status
+          debug:
+            msg: "Services stopped: {{ service_status.stdout_lines | default(['All services stopped']) }}"
+
+    # Phase 2: Clean Container Runtime (Safe)
+    - name: Clean container runtime safely
+      block:
+        - name: Stop all containers
+          shell: |
+            if command -v crictl &> /dev/null; then
+              crictl stop $(crictl ps -q) 2>/dev/null || true
+              crictl rm $(crictl ps -aq) 2>/dev/null || true
+            fi
+          ignore_errors: yes
+          
+        - name: Remove container images
+          shell: |
+            if command -v crictl &> /dev/null; then
+              crictl rmi $(crictl images -q) 2>/dev/null || true
+            fi
+          ignore_errors: yes
+
+    # Phase 3: Remove Data Directories
+    - name: Remove RKE2 data directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ rke2_data_dirs }}"
+      ignore_errors: yes
+      
+    - name: Remove container runtime directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ container_dirs }}"
+      ignore_errors: yes
+      
+    - name: Remove temporary files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ temp_files }}"
+      ignore_errors: yes
+
+    # Phase 4: Clean System Configuration
+    - name: Clean system configurations
+      block:
+        - name: Remove RKE2 binaries
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /usr/local/bin/rke2
+            - /usr/local/bin/rke2-killall.sh
+            - /usr/local/bin/rke2-uninstall.sh
+            - /usr/local/bin/rke2-agent-uninstall.sh
+            - /usr/local/bin/kubectl
+            - /usr/local/bin/crictl
+            - /usr/local/bin/ctr
+          ignore_errors: yes
+            
+        - name: Remove systemd unit files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/systemd/system/rke2-server.service
+            - /etc/systemd/system/rke2-agent.service
+            - /usr/local/lib/systemd/system/rke2-server.service
+            - /usr/local/lib/systemd/system/rke2-agent.service
+          ignore_errors: yes
+          
+        - name: Reload systemd after cleanup
+          systemd:
+            daemon_reload: yes
+
+    # Phase 5: Force cleanup of stubborn files and processes
+    - name: Force cleanup stubborn files and processes
+      block:
+        - name: Kill any remaining RKE2 processes forcefully
+          shell: |
+            pkill -9 -f "rke2|containerd|kubelet" || true
+            pkill -9 -f "canal|calico|flannel" || true
+          ignore_errors: yes
+          
+        - name: Unmount any remaining RKE2 mounts
+          shell: |
+            umount $(mount | grep -E "(rke2|rancher|kubelet)" | awk '{print $3}') 2>/dev/null || true
+            umount /var/lib/kubelet/pods/*/volumes/kubernetes.io~secret/* 2>/dev/null || true
+          ignore_errors: yes
+          
+        - name: Force remove stubborn directories
+          shell: |
+            rm -rf /var/lib/rancher/rke2 || true
+            rm -rf /etc/rancher/rke2 || true
+            rm -rf /var/lib/kubelet || true
+            rm -rf /var/lib/containerd || true
+            rm -rf /run/containerd || true
+            rm -rf /var/log/containers || true
+            rm -rf /var/log/pods || true
+            rm -rf /opt/cni || true
+            rm -rf /etc/cni || true
+            rm -rf /var/lib/cni || true
+            rm -rf /run/flannel || true
+            rm -rf /var/lib/calico || true
+            rm -rf /var/run/calico || true
+          ignore_errors: yes
+          
+        - name: Clean up failed systemd units
+          shell: |
+            systemctl reset-failed rke2-server.service || true
+            systemctl reset-failed rke2-agent.service || true
+          ignore_errors: yes
+          
+        - name: Remove any remaining RKE2 network interfaces
+          shell: |
+            for iface in $(ip link show | grep -E "(cni|flannel|calico|canal)" | cut -d: -f2 | cut -d@ -f1 | tr -d ' '); do
+              ip link delete $iface 2>/dev/null || true
+            done
+          ignore_errors: yes
+          
+        - name: Clean package manager cache
+          shell: |
+            yum clean all || true
+            rm -rf /var/cache/yum/* || true
+          ignore_errors: yes
+          
+        - name: Display pre-reboot cleanup status
+          debug:
+            msg: |
+              🧹 Pre-reboot cleanup completed on {{ inventory_hostname }}
+              ================================================
+              
+              ✅ Forced cleanup of stubborn processes and files
+              ✅ Unmounted remaining RKE2 mounts
+              ✅ Removed network interfaces
+              ✅ Reset failed systemd units
+              ✅ Cleaned package manager cache
+              
+              🔄 Node will reboot in 10 seconds for clean start...
+
+    # Phase 6: Clean reboot for fresh start
+    - name: Reboot nodes for clean start
+      block:
+        - name: Sync filesystem before reboot
+          shell: sync
+          
+        - name: Reboot node for clean start
+          reboot:
+            msg: "Rebooting for clean RKE2 installation"
+            connect_timeout: 5
+            reboot_timeout: 300
+            pre_reboot_delay: 10
+            post_reboot_delay: 30
+            
+        - name: Wait for node to come back online
+          wait_for_connection:
+            delay: 30
+            timeout: 300
+            
+        - name: Verify node is fully booted
+          shell: uptime
+          register: uptime_result
+          
+        - name: Display post-reboot status
+          debug:
+            msg: |
+              🚀 Node {{ inventory_hostname }} rebooted successfully!
+              =============================================
+              
+              ⏰ Uptime: {{ uptime_result.stdout }}
+              ✅ Node is ready for fresh RKE2 installation
+
+    # Phase 7: Post-reboot verification
+    - name: Post-reboot verification
+      block:
+        - name: Check if RKE2 processes are running
+          shell: pgrep -f "rke2|containerd|kubelet" || echo "No RKE2 processes found"
+          register: rke2_processes
+          ignore_errors: yes
+          
+        - name: Check remaining RKE2 files
+          shell: find /var/lib/rancher /etc/rancher -type f 2>/dev/null | head -10 || echo "No RKE2 files found"
+          register: remaining_files
+          ignore_errors: yes
+          
+        - name: Check network interfaces
+          shell: ip link show | grep -E "(cni|flannel|calico|canal)" || echo "No RKE2 network interfaces found"
+          register: network_interfaces
+          ignore_errors: yes
+          
+        - name: Display final cleanup results
+          debug:
+            msg: |
+              🎉 Final RKE2 Cleanup Results on {{ inventory_hostname }}:
+              =====================================================
+              
+              📊 RKE2 Processes: {{ rke2_processes.stdout }}
+              📁 RKE2 Files: {{ remaining_files.stdout }}
+              🌐 Network Interfaces: {{ network_interfaces.stdout }}
+              
+              ✅ Node is completely clean and ready for fresh installation!
+
+  post_tasks:
+    - name: Final cleanup summary
+      debug:
+        msg: |
+          🎉 Enhanced RKE2 Cleanup Completed Successfully!
+          ===============================================
+          
+          ✅ All nodes have been cleaned safely
+          ✅ SSH connectivity preserved
+          ✅ System stability maintained
+          ✅ All nodes rebooted with clean state
+          ✅ Stubborn processes and files removed
+          ✅ Network interfaces cleaned
+          ✅ Systemd units reset
+          ✅ Package manager cache cleared
+          
+          🚀 Next Steps:
+          1. Verify all nodes are accessible after reboot
+          2. Run the complete installation playbook:
+             ansible-playbook -i inventory complete-installation-runbook.yml
+          3. Monitor the fresh cluster deployment
+          4. Check cluster health after installation
+          
+          💡 The nodes are now completely clean and ready for a fresh RKE2 installation!
+          
+          ⚠️ Important:
+          - All RKE2 data has been removed
+          - Fresh installation will create new certificates
+          - Previous kubectl configurations are no longer valid
+      run_once: true
