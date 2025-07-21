@@ -9,24 +9,41 @@
   register: synology_csi_check
   ignore_errors: true
 
+- name: Copy Synology CSI manifests to master node
+  copy:
+    src: "{{ item }}"
+    dest: "/tmp/{{ item | basename }}"
+    mode: '0644'
+  loop:
+    - /home/partha/synology-csi/deploy/kubernetes/v1.20/namespace.yml
+    - /home/partha/synology-csi/deploy/kubernetes/v1.20/csi-driver.yml
+    - /home/partha/synology-csi/deploy/kubernetes/v1.20/controller.yml
+    - /home/partha/synology-csi/deploy/kubernetes/v1.20/node.yml
+  when: synology_csi_check.stdout | int == 0
+
 - name: Deploy Synology CSI driver using kubectl manifests
   shell: |
-    /var/lib/rancher/rke2/bin/kubectl apply -f /home/partha/synology-csi/deploy/kubernetes/v1.20/namespace.yml
-    /var/lib/rancher/rke2/bin/kubectl apply -f /home/partha/synology-csi/deploy/kubernetes/v1.20/csi-driver.yml
-    /var/lib/rancher/rke2/bin/kubectl apply -f /home/partha/synology-csi/deploy/kubernetes/v1.20/controller.yml
-    /var/lib/rancher/rke2/bin/kubectl apply -f /home/partha/synology-csi/deploy/kubernetes/v1.20/node.yml
+    /var/lib/rancher/rke2/bin/kubectl apply -f /tmp/namespace.yml
+    /var/lib/rancher/rke2/bin/kubectl apply -f /tmp/csi-driver.yml
+    /var/lib/rancher/rke2/bin/kubectl apply -f /tmp/controller.yml
+    /var/lib/rancher/rke2/bin/kubectl apply -f /tmp/node.yml
   environment:
     KUBECONFIG: /etc/rancher/rke2/rke2.yaml
   register: synology_deploy_result
   when: synology_csi_check.stdout | int == 0
-  delegate_to: localhost
+
+- name: Copy client-info.yml to master node
+  copy:
+    src: /home/partha/synology-csi/config/client-info.yml
+    dest: /tmp/client-info.yml
+    mode: '0644'
+  when: synology_csi_check.stdout | int == 0
 
 - name: Create client-info secret for Synology CSI driver
-  shell: /var/lib/rancher/rke2/bin/kubectl create secret -n synology-csi generic client-info-secret --from-file=/home/partha/synology-csi/config/client-info.yml
+  shell: /var/lib/rancher/rke2/bin/kubectl create secret -n synology-csi generic client-info-secret --from-file=/tmp/client-info.yml
   environment:
     KUBECONFIG: /etc/rancher/rke2/rke2.yaml
   when: synology_csi_check.stdout | int == 0
-  delegate_to: localhost
   ignore_errors: true
 
 - name: Wait for Synology CSI deployment to complete
@@ -34,12 +51,31 @@
     seconds: 30
   when: synology_csi_check.stdout | int == 0
 
+- name: Copy Synology storage class to master node
+  copy:
+    src: /home/partha/synology-csi/storage-class-iscsi.yml
+    dest: /tmp/storage-class-iscsi.yml
+    mode: '0644'
+  when: synology_csi_check.stdout | int == 0
+
 - name: Apply Synology storage class
-  shell: /var/lib/rancher/rke2/bin/kubectl apply -f /home/partha/synology-csi/storage-class-iscsi.yml
+  shell: /var/lib/rancher/rke2/bin/kubectl apply -f /tmp/storage-class-iscsi.yml
   environment:
     KUBECONFIG: /etc/rancher/rke2/rke2.yaml
   when: synology_csi_check.stdout | int == 0
-  delegate_to: localhost
+
+- name: Clean up copied files from master node
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/namespace.yml
+    - /tmp/csi-driver.yml
+    - /tmp/controller.yml
+    - /tmp/node.yml
+    - /tmp/client-info.yml
+    - /tmp/storage-class-iscsi.yml
+  when: synology_csi_check.stdout | int == 0
 
 - name: Verify Synology CSI pods are running
   shell: /var/lib/rancher/rke2/bin/kubectl get pods -n synology-csi

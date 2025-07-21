@@ -1,0 +1,196 @@
+# RKE2 Infrastructure Project - Git Ignore Rules
+# ===============================================
+# This file excludes sensitive files, credentials, temporary files,
+# and other files that should not be version controlled.
+
+# Temporary and backup files
+*.tmp
+*.bak
+*~
+*.swp
+*.swo
+
+# VS Code workspace state (keep settings.json)
+.vscode/launch.json
+.vscode/tasks.json
+.vscode/*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Ansible temporary files
+*.retry
+.ansible/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+*.log
+
+# Archive files (keep only essential ones)
+*.tar.gz
+*.zip
+*.7z
+
+# Sensitive files and credentials
+*.key
+*.crt
+*.pem
+*.p12
+*.pfx
+kubeconfig*
+*kubeconfig*
+.kube/
+rke2.yaml
+config.yaml
+admin.conf
+
+# SSH keys and certificates
+id_rsa*
+id_ed25519*
+known_hosts
+authorized_keys
+*.pub
+
+# Passwords and secrets
+*password*
+*secret*
+*token*
+*.env
+.env.*
+secrets/
+credentials/
+
+# Kubernetes sensitive files
+*-secret.yml
+*-secret.yaml
+*secrets.yml
+*secrets.yaml
+bootstrap-secret*
+tls-secret*
+
+# Helm values with sensitive data
+*-values-prod.yml
+*-values-production.yml
+*-values-secret*.yml
+values-secret*.yaml
+
+# Temporary deployment files
+/tmp/
+temp/
+*.temp
+*-temp.*
+values-*.yaml.tmp
+monitoring-values*.yaml
+rancher-values*.yaml
+kong-*-values*.yaml
+
+# Ansible sensitive files
+vault.yml
+*vault*
+host_vars/*/vault*
+group_vars/*/vault*
+*.vault
+
+# Old/duplicate deployment files (examples of what to ignore)
+*-old.yml
+*-backup.yml
+*-temp.yml
+deploy-*.yml.bak
+install-*.yml.old
+
+# Backup configurations with potential secrets
+inventory.bak
+inventory-*
+*.inventory
+
+# Database dumps and exports
+*.sql
+*.dump
+*.db
+
+# Monitoring and logging sensitive data
+prometheus-data/
+grafana-data/
+alertmanager-data/
+logs/
+*.log.*
+
+# IDE and editor files with potential sensitive content
+.idea/
+*.iml
+.vscode/settings.json
+.vscode/launch.json
+
+# macOS specific (additional)
+.AppleDouble
+.LSOverride
+
+# Linux specific
+*~
+
+# Package files
+node_modules/
+*.deb
+*.rpm
+
+# Documentation with sensitive info (if any)
+*-private.md
+*-internal.md
+SECRETS.md
+PASSWORDS.md
+
+# Network configuration files (may contain sensitive info)
+*netplan*
+*network-config*
+
+# Certificate authority files
+ca.key
+ca.crt
+ca-key.pem
+ca.pem
+
+# Git security scanning results
+.git-secrets/
+.truffleHog/
+secret-scan-results.*
+
+# Editor temporary files with potential secrets
+.*.swp
+.*.swo
+*/.*.swp
+*/.*.swo
+
+# Local environment and testing
+.local/
+test-credentials/
+local-config/
+
+# Terraform (if used in future)
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+*.tfvars
+
+# Docker secrets (if used)
+docker-compose.override.yml
+.dockerignore.local
+
+# Cluster management artifacts
+cluster-shutdown-*.log
+cluster-startup-*.log
+etcd-snapshot-*.log
+shutdown-status-*.txt
+startup-status-*.txt
+cluster-health-*.txt
+node-status-*.txt
