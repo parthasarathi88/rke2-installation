@@ -1,14 +1,40 @@
 ---
 # Prerequisites Role - System preparation and iSCSI installation
-- name: Install required packages
-  shell: yum install -y curl wget tar iptables policycoreutils-python nfs-utils
-  args:
-    creates: /usr/bin/curl
+- name: Update package cache (Ubuntu/Debian)
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  when: ansible_os_family == "Debian"
 
-- name: Install iSCSI initiator and multipath packages
-  shell: yum install -y iscsi-initiator-utils device-mapper-multipath
-  args:
-    creates: /usr/sbin/iscsiadm
+- name: Install required packages (Ubuntu/Debian)
+  apt:
+    name:
+      - curl
+      - wget
+      - tar
+      - iptables
+      - nfs-common
+      - open-iscsi
+      - multipath-tools
+      - python3-pip
+      - apparmor-utils
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Install required packages (RHEL/CentOS)
+  yum:
+    name:
+      - curl
+      - wget
+      - tar
+      - iptables
+      - policycoreutils-python
+      - nfs-utils
+      - iscsi-initiator-utils
+      - device-mapper-multipath
+    state: present
+  when: ansible_os_family == "RedHat"
 
 - name: Generate unique IQN for iSCSI initiator
   shell: |
@@ -33,17 +59,34 @@
     - { regexp: '^#?node.conn\[0\].timeo.login_timeout', line: 'node.conn[0].timeo.login_timeout = 15' }
     - { regexp: '^#?node.conn\[0\].timeo.logout_timeout', line: 'node.conn[0].timeo.logout_timeout = 15' }
 
-- name: Enable and start iSCSI daemon service
+- name: Enable and start iSCSI daemon service (Ubuntu/Debian)
   systemd:
     name: iscsid
     enabled: yes
     state: started
+  when: ansible_os_family == "Debian"
 
-- name: Enable and start iSCSI service
+- name: Enable and start open-iscsi service (Ubuntu/Debian)
+  systemd:
+    name: open-iscsi
+    enabled: yes
+    state: started
+  when: ansible_os_family == "Debian"
+  ignore_errors: yes
+
+- name: Enable and start iSCSI daemon service (RHEL/CentOS)
+  systemd:
+    name: iscsid
+    enabled: yes
+    state: started
+  when: ansible_os_family == "RedHat"
+
+- name: Enable and start iSCSI service (RHEL/CentOS)
   systemd:
     name: iscsi
     enabled: yes
     state: started
+  when: ansible_os_family == "RedHat"
   ignore_errors: yes
 
 - name: Configure multipath daemon
@@ -72,17 +115,35 @@
     state: started
   ignore_errors: yes
 
-- name: Disable firewalld (RKE2 manages its own firewall rules)
+# Ubuntu 20 uses ufw instead of firewalld
+- name: Disable UFW firewall (Ubuntu/Debian) - RKE2 manages its own firewall rules
+  ufw:
+    state: disabled
+  when: ansible_os_family == "Debian"
+  ignore_errors: yes
+
+- name: Disable firewalld (RHEL/CentOS) - RKE2 manages its own firewall rules
   systemd:
     name: firewalld
     state: stopped
     enabled: no
+  when: ansible_os_family == "RedHat"
   ignore_errors: yes
 
-- name: Disable SELinux temporarily
+# Ubuntu 20 uses AppArmor instead of SELinux
+- name: Disable AppArmor for containerd (Ubuntu/Debian)
+  shell: |
+    aa-complain /usr/bin/containerd || true
+    systemctl disable apparmor.service || true
+  when: ansible_os_family == "Debian"
+  ignore_errors: yes
+
+- name: Disable SELinux temporarily (RHEL/CentOS)
   shell: |
     setenforce 0 || true
     sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config || true
+  when: ansible_os_family == "RedHat"
+  ignore_errors: yes
 
 - name: Load required kernel modules
   shell: |

@@ -8,6 +8,7 @@ logging_namespace: "logging-tracing"
 kubeconfig_path: "/etc/rancher/rke2/rke2.yaml"
 storage_class: "synostorage"
 cluster_name: "rke2-poc"
+ingress_class: "kong-external"
 
 # Helm Chart Versions
 elasticsearch_chart_version: "8.5.1"
@@ -20,6 +21,8 @@ jaeger_version: "1.46"
 # Elasticsearch Configuration
 elasticsearch_replicas: 1
 elasticsearch_min_master_nodes: 1
+elasticsearch_cluster_name: "elasticsearch"
+elasticsearch_node_group: "master"
 elasticsearch_cpu_request: "500m"
 elasticsearch_cpu_limit: "1000m"
 elasticsearch_memory_request: "1Gi"

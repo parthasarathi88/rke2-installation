@@ -1,5 +1,6 @@
 # Inventory file for RKE2 installation
 # Setup: 192.168.1.141 as controller/etcd, 142 and 145 as workers
+# Configured for Ubuntu 20.04 LTS (target nodes)
 
 [rke2_nodes]
 mgmt01 ansible_host=192.168.1.141 ansible_user=partha node_role=server
@@ -24,8 +25,8 @@ ansible_ssh_private_key_file=~/.ssh/id_rsa
 # ansible_ssh_pass=your_password
 # ansible_become_pass=your_sudo_password
 
-# RKE2 configuration variables - Using stable v1.27.x for better CentOS 7 compatibility
-rke2_version=v1.27.16+rke2r1
+# RKE2 configuration variables - Optimized for Ubuntu 20.04 LTS
+rke2_version=v1.28.15+rke2r1  # Latest stable version compatible with Ubuntu 20.04
 rke2_channel=stable
 rke2_cluster_name=rke2-cluster
 rke2_cluster_secret=my-cluster-secret
@@ -37,11 +38,12 @@ rke2_data_dir=/var/lib/rancher/rke2
 cluster_cidr=10.42.0.0/16
 service_cidr=10.43.0.0/16
 cluster_dns=10.43.0.10
+cluster_api_ha_ip=192.168.1.200
 
-# Rancher configuration
+# Rancher configuration - Updated for newer Kubernetes compatibility
 rancher_hostname=rancher.dellpc.in
-rancher_version=2.6.13
-rancher_chart_version=2.6.13
+rancher_version=2.10.3  # Compatible with Kubernetes 1.28
+rancher_chart_version=2.10.3
 rancher_replicas=2
 letsencrypt_email=admin@dellpc.in
 

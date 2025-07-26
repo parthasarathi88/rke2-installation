@@ -244,7 +244,7 @@
     KUBECONFIG: /etc/rancher/rke2/rke2.yaml
 
 - name: Wait for test PVC to be bound (with extended timeout)
-  shell: /var/lib/rancher/rke2/bin/kubectl wait --for=condition=Bound pvc/nfs-test-pvc -n default --timeout=300s
+  shell: /var/lib/rancher/rke2/bin/kubectl wait --for=condition=Bound pvc/nfs-test-pvc -n default --timeout=10s
   environment:
     KUBECONFIG: /etc/rancher/rke2/rke2.yaml
   register: pvc_wait_result

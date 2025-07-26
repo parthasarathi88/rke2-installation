@@ -1,0 +1,34 @@
+query:
+  enabled: true  # Must be true if using ingress
+  ingress:
+    enabled: true
+    className: kong-external
+    hosts:
+      - jaeger.dellpc.in
+    paths:
+      - /
+    pathType: Prefix
+  service:
+    type: ClusterIP
+
+allInOne:
+  enabled: true
+  image:
+    repository: jaegertracing/all-in-one
+    tag: "{{ jaeger_version }}"  # Better to split repository and tag
+  resources:
+    requests:
+      cpu: "{{ jaeger_cpu_request }}"
+      memory: "{{ jaeger_memory_request }}"
+    limits:
+      cpu: "{{ jaeger_cpu_limit }}"
+      memory: "{{ jaeger_memory_limit }}"
+
+agent:
+  enabled: false
+
+collector:
+  enabled: false
+
+storage:
+  type: memory  # Should explicitly specify storage type

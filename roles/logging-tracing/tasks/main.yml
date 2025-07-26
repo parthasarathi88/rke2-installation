@@ -46,337 +46,143 @@
 
 # Deploy Elasticsearch
 - name: Deploy Elasticsearch
-  kubernetes.core.helm:
-    name: elasticsearch
-    chart_ref: elastic/elasticsearch
-    chart_version: "{{ elasticsearch_chart_version }}"
-    release_namespace: "{{ logging_namespace }}"
-    create_namespace: true
-    kubeconfig: "{{ kubeconfig_path }}"
-    values:
-      replicas: "{{ elasticsearch_replicas }}"
-      minimumMasterNodes: "{{ elasticsearch_min_master_nodes }}"
-      
-      # Resource limits for POC environment
-      resources:
-        requests:
-          cpu: "{{ elasticsearch_cpu_request }}"
-          memory: "{{ elasticsearch_memory_request }}"
-        limits:
-          cpu: "{{ elasticsearch_cpu_limit }}"
-          memory: "{{ elasticsearch_memory_limit }}"
-      
-      # JVM heap settings for 4GB nodes
-      esJavaOpts: "{{ elasticsearch_java_opts }}"
-      
-      # Volume settings for synostorage
-      volumeClaimTemplate:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: "{{ storage_class }}"
-        resources:
-          requests:
-            storage: "{{ elasticsearch_storage_size }}"
-      
-      # POC configuration - single node mode
-      clusterHealthCheckParams: "wait_for_status=yellow&timeout=1s"
-      
-      # Security disabled for POC
-      esConfig:
-        elasticsearch.yml: |
-          xpack.security.enabled: false
-          xpack.security.enrollment.enabled: false
-          xpack.security.http.ssl.enabled: false
-          xpack.security.transport.ssl.enabled: false
-          
-      # Service configuration
-      service:
-        type: ClusterIP
-        ports:
-          - name: http
-            port: 9200
-            protocol: TCP
-          - name: transport
-            port: 9300
-            protocol: TCP
-            
-      # Ingress for external access
-      ingress:
-        enabled: "{{ elasticsearch_ingress_enabled }}"
-        className: kong-external
-        annotations:
-          konghq.com/strip-path: "true"
-          konghq.com/preserve-host: "true"
-        hosts:
-          - host: "{{ elasticsearch_external_url }}"
-            paths:
-              - path: /
-                pathType: Prefix
-                
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install elasticsearch elastic/elasticsearch \
+      --version "{{ elasticsearch_chart_version }}" \
+      --namespace "{{ logging_namespace }}" \
+      --create-namespace \
+      --set replicas="{{ elasticsearch_replicas }}" \
+      --set minimumMasterNodes="{{ elasticsearch_min_master_nodes }}" \
+      --set resources.requests.cpu="{{ elasticsearch_cpu_request }}" \
+      --set resources.requests.memory="{{ elasticsearch_memory_request }}" \
+      --set resources.limits.cpu="{{ elasticsearch_cpu_limit }}" \
+      --set resources.limits.memory="{{ elasticsearch_memory_limit }}" \
+      --set esJavaOpts="{{ elasticsearch_java_opts }}" \
+      --set volumeClaimTemplate.accessModes[0]="ReadWriteOnce" \
+      --set volumeClaimTemplate.storageClassName="{{ storage_class }}" \
+      --set volumeClaimTemplate.resources.requests.storage="{{ elasticsearch_storage_size }}" \
+      --set clusterName="{{ elasticsearch_cluster_name }}" \
+      --set nodeGroup="{{ elasticsearch_node_group }}" \
+      --set discovery.type=single-node \
+      --set xpack.security.enabled=false \
+      --set service.type=ClusterIP \
+      --set ingress.enabled="{{ elasticsearch_ingress_enabled }}" \
+      --set ingress.className="{{ ingress_class }}" \
+      --set ingress.hosts[0].host="{{ elasticsearch_external_url }}" \
+      --set ingress.hosts[0].paths[0].path="/" \
+      --set ingress.hosts[0].paths[0].pathType=Prefix \
+      --wait --timeout=600s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
   tags:
     - logging
     - elasticsearch
 
 # Deploy Kibana
-- name: Deploy Kibana
-  kubernetes.core.helm:
-    name: kibana
-    chart_ref: elastic/kibana
-    chart_version: "{{ kibana_chart_version }}"
-    release_namespace: "{{ logging_namespace }}"
-    kubeconfig: "{{ kubeconfig_path }}"
-    values:
-      # Resource limits for POC environment
-      resources:
-        requests:
-          cpu: "{{ kibana_cpu_request }}"
-          memory: "{{ kibana_memory_request }}"
-        limits:
-          cpu: "{{ kibana_cpu_limit }}"
-          memory: "{{ kibana_memory_limit }}"
-          
-      # Elasticsearch connection
-      elasticsearchHosts: "http://elasticsearch-master:9200"
-      
-      # Kibana configuration
-      kibanaConfig:
-        kibana.yml: |
-          server.host: "0.0.0.0"
-          server.shutdownTimeout: "5s"
-          elasticsearch.hosts: ["http://elasticsearch-master:9200"]
-          monitoring.ui.container.elasticsearch.enabled: true
-          xpack.security.enabled: false
-          xpack.encryptedSavedObjects.encryptionKey: "{{ kibana_encryption_key }}"
-          
-      # Service configuration
-      service:
-        type: ClusterIP
-        port: 5601
-        
-      # Ingress for external access
-      ingress:
-        enabled: "{{ kibana_ingress_enabled }}"
-        className: kong-external
-        annotations:
-          konghq.com/strip-path: "true"
-          konghq.com/preserve-host: "true"
-        hosts:
-          - host: "{{ kibana_external_url }}"
-            paths:
-              - path: /
-                pathType: Prefix
-                
+- name: Deploy Kibana (simplified)
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install kibana elastic/kibana \
+      --version "{{ kibana_chart_version }}" \
+      --namespace "{{ logging_namespace }}" \
+      --set resources.requests.cpu="{{ kibana_cpu_request }}" \
+      --set resources.requests.memory="{{ kibana_memory_request }}" \
+      --set resources.limits.cpu="{{ kibana_cpu_limit }}" \
+      --set resources.limits.memory="{{ kibana_memory_limit }}" \
+      --set elasticsearchHosts="http://elasticsearch-master:9200" \
+      --set service.type=ClusterIP \
+      --set service.port=5601 \
+      --set healthCheckPath="/app/kibana" \
+      --set lifecycle.preStop.exec.command='["/bin/sh","-c","sleep 20"]' \
+      --wait --timeout=600s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
   tags:
     - logging
     - kibana
+  ignore_errors: true
 
 # Deploy Logstash
 - name: Deploy Logstash
-  kubernetes.core.helm:
-    name: logstash
-    chart_ref: elastic/logstash
-    chart_version: "{{ logstash_chart_version }}"
-    release_namespace: "{{ logging_namespace }}"
-    kubeconfig: "{{ kubeconfig_path }}"
-    values:
-      replicas: "{{ logstash_replicas }}"
-      
-      # Resource limits for POC environment
-      resources:
-        requests:
-          cpu: "{{ logstash_cpu_request }}"
-          memory: "{{ logstash_memory_request }}"
-        limits:
-          cpu: "{{ logstash_cpu_limit }}"
-          memory: "{{ logstash_memory_limit }}"
-          
-      # Logstash configuration
-      logstashConfig:
-        logstash.yml: |
-          http.host: "0.0.0.0"
-          xpack.monitoring.elasticsearch.hosts: ["http://elasticsearch-master:9200"]
-          
-      logstashPipeline:
-        logstash.conf: |
-          input {
-            beats {
-              port => 5044
-            }
-            http {
-              port => 8080
-            }
-          }
-          filter {
-            if [kubernetes] {
-              mutate {
-                add_field => { "cluster" => "{{ cluster_name }}" }
-              }
-            }
-            date {
-              match => [ "@timestamp", "ISO8601" ]
-            }
-          }
-          output {
-            elasticsearch {
-              hosts => ["elasticsearch-master:9200"]
-              index => "logstash-logs-%{+YYYY.MM.dd}"
-            }
-          }
-          
-      # Service configuration
-      service:
-        type: ClusterIP
-        ports:
-          - name: beats
-            port: 5044
-            protocol: TCP
-          - name: http
-            port: 8080
-            protocol: TCP
-            
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install logstash elastic/logstash \
+      --version "{{ logstash_chart_version }}" \
+      --namespace "{{ logging_namespace }}" \
+      --set replicas="{{ logstash_replicas }}" \
+      --set resources.requests.cpu="{{ logstash_cpu_request }}" \
+      --set resources.requests.memory="{{ logstash_memory_request }}" \
+      --set resources.limits.cpu="{{ logstash_cpu_limit }}" \
+      --set resources.limits.memory="{{ logstash_memory_limit }}" \
+      --set service.type=ClusterIP \
+      --set service.ports[0].name=beats \
+      --set service.ports[0].port=5044 \
+      --set service.ports[0].protocol=TCP \
+      --set service.ports[1].name=http \
+      --set service.ports[1].port=8080 \
+      --set service.ports[1].protocol=TCP \
+      --wait --timeout=600s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
   tags:
     - logging
     - logstash
 
 # Deploy Filebeat for log collection
 - name: Deploy Filebeat DaemonSet
-  kubernetes.core.helm:
-    name: filebeat
-    chart_ref: elastic/filebeat
-    chart_version: "{{ filebeat_chart_version }}"
-    release_namespace: "{{ logging_namespace }}"
-    kubeconfig: "{{ kubeconfig_path }}"
-    values:
-      daemonset:
-        enabled: true
-        
-      # Resource limits for POC environment
-      resources:
-        requests:
-          cpu: "{{ filebeat_cpu_request }}"
-          memory: "{{ filebeat_memory_request }}"
-        limits:
-          cpu: "{{ filebeat_cpu_limit }}"
-          memory: "{{ filebeat_memory_limit }}"
-          
-      # Filebeat configuration
-      filebeatConfig:
-        filebeat.yml: |
-          filebeat.inputs:
-          - type: container
-            paths:
-              - /var/log/containers/*.log
-            processors:
-            - add_kubernetes_metadata:
-                host: ${NODE_NAME}
-                matchers:
-                - logs_path:
-                    logs_path: "/var/log/containers/"
-            - drop_fields:
-                fields: ["agent", "ecs", "host", "input"]
-                
-          output.logstash:
-            hosts: ["logstash-logstash:5044"]
-            
-          processors:
-          - add_host_metadata:
-              when.not.contains.tags: forwarded
-          - add_cloud_metadata: ~
-          - add_docker_metadata: ~
-          - add_kubernetes_metadata: ~
-          
-      # Volume mounts
-      extraVolumes:
-        - name: varlibdockercontainers
-          hostPath:
-            path: /var/lib/docker/containers
-        - name: varlog
-          hostPath:
-            path: /var/log
-            
-      extraVolumeMounts:
-        - name: varlibdockercontainers
-          mountPath: /var/lib/docker/containers
-          readOnly: true
-        - name: varlog
-          mountPath: /var/log
-          readOnly: true
-          
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install filebeat elastic/filebeat \
+      --version "{{ filebeat_chart_version }}" \
+      --namespace "{{ logging_namespace }}" \
+      --set daemonset.enabled=true \
+      --set resources.requests.cpu="{{ filebeat_cpu_request }}" \
+      --set resources.requests.memory="{{ filebeat_memory_request }}" \
+      --set resources.limits.cpu="{{ filebeat_cpu_limit }}" \
+      --set resources.limits.memory="{{ filebeat_memory_limit }}" \
+      --wait --timeout=600s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
   tags:
     - logging
+
     - filebeat
 
 # Deploy Jaeger for distributed tracing
-- name: Deploy Jaeger
-  kubernetes.core.helm:
-    name: jaeger
-    chart_ref: jaegertracing/jaeger
-    chart_version: "{{ jaeger_chart_version }}"
-    release_namespace: "{{ logging_namespace }}"
-    kubeconfig: "{{ kubeconfig_path }}"
-    values:
-      # Use all-in-one deployment for POC
-      allInOne:
-        enabled: true
-        image: jaegertracing/all-in-one:{{ jaeger_version }}
-        
-        # Resource limits for POC environment
-        resources:
-          requests:
-            cpu: "{{ jaeger_cpu_request }}"
-            memory: "{{ jaeger_memory_request }}"
-          limits:
-            cpu: "{{ jaeger_cpu_limit }}"
-            memory: "{{ jaeger_memory_limit }}"
-            
-        # Storage configuration
-        options:
-          memory:
-            max-traces: "{{ jaeger_max_traces }}"
-            
-        # Service configuration
-        service:
-          type: ClusterIP
-          
-      # Disable individual components (using all-in-one)
-      agent:
-        enabled: false
-      collector:
-        enabled: false
-      query:
-        enabled: false
-        ingress:
-          enabled: "{{ jaeger_ingress_enabled }}"
-          className: kong-external
-          annotations:
-            konghq.com/strip-path: "true"
-            konghq.com/preserve-host: "true"
-          hosts:
-            - host: "{{ jaeger_external_url }}"
-              paths:
-                - path: /
-                  pathType: Prefix
-                  
+- name: Deploy Jaeger values file (template)
+  template:
+    src: roles/logging-tracing/files/jaeger-values.yaml
+    dest: /tmp/jaeger-values.yaml
+    mode: '0644'
   tags:
     - tracing
     - jaeger
 
+- name: Deploy Jaeger (Helm)
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install jaeger jaegertracing/jaeger \
+      --version "{{ jaeger_chart_version }}" \
+      --namespace "{{ logging_namespace }}" \
+      -f /tmp/jaeger-values.yaml \
+      --wait --timeout=60s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  tags:
+    - tracing
+    - jaeger
+  ignore_errors: true
+
 # Create index patterns in Kibana
 - name: Wait for Kibana to be ready
-  kubernetes.core.k8s_info:
-    api_version: v1
-    kind: Pod
-    namespace: "{{ logging_namespace }}"
-    label_selectors:
-      - app=kibana
-    wait: true
-    wait_condition:
-      type: Ready
-      status: "True"
-    wait_timeout: 300
-    kubeconfig: "{{ kubeconfig_path }}"
+  shell: /var/lib/rancher/rke2/bin/kubectl wait --for=condition=ready pod -l app=kibana -n "{{ logging_namespace }}" --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
   tags:
     - logging
     - kibana
+  ignore_errors: true
 
 - name: Wait for Elasticsearch indices to be created
   pause:

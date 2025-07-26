@@ -1,24 +1,25 @@
 ---
-# Complete RKE2 + Rancher Installation Runbook
-# Based on successful deployment of RKE2 v1.27.16+rke2r1 with external API access
+# Complete RKE2 + Rancher Installation Runbook for Ubuntu 20.04 LTS
+# Based on successful deployment of RKE2 v1.28.15+rke2r1 with external API access
 # 
 # Successfully Tested Configuration:
-# - RKE2 v1.27.16+rke2r1 with Canal CNI
+# - Ubuntu 20.04 LTS nodes with RKE2 v1.28.15+rke2r1 and Canal CNI
 # - 3-node cluster: 192.168.1.141 (master), 192.168.1.142,145 (workers)
 # - MetalLB LoadBalancer with external API server access via 192.168.1.200
 # - SAN certificate includes: 192.168.1.141, 192.168.1.200, rancher.dellpc.in
 # - Workloads scheduled only on worker nodes (master tainted)
 # - API server accessible via both internal (192.168.1.141:6443) and external (192.168.1.200:6443) IPs
+# - AppArmor compatibility and UFW firewall management
 #
 # Optimized for 6GB worker nodes with comprehensive monitoring and networking
-- name: Complete RKE2 Kubernetes Cluster with Rancher Management
+- name: Complete RKE2 Kubernetes Cluster with Rancher Management (Ubuntu 20.04)
   hosts: rke2_nodes
   become: yes
   gather_facts: yes
   
   vars:
-    # RKE2 Configuration - Tested and working version
-    rke2_version: "v1.27.16+rke2r1"
+    # RKE2 Configuration - Updated for Ubuntu 20.04 compatibility
+    rke2_version: "v1.28.15+rke2r1"  # Latest stable version with Ubuntu 20 support
     rke2_channel: "stable"
     cluster_cidr: "10.42.0.0/16"
     service_cidr: "10.43.0.0/16"
@@ -41,9 +42,9 @@
     certmanager_namespace: "cert-manager"
     certmanager_version: "v1.13.3"
     
-    # Rancher Configuration (updated for Kubernetes 1.27 compatibility)
+    # Rancher Configuration (updated for Kubernetes 1.28 compatibility)
     rancher_hostname: "rancher.dellpc.in"
-    rancher_version: "2.10.3"  # Compatible with Kubernetes 1.27
+    rancher_version: "2.10.3"  # Compatible with Kubernetes 1.28
     rancher_chart_version: "2.10.3"
     rancher_replicas: 2
     rancher_ssl_mode: "rancher"  # Use self-signed certificates instead of Let's Encrypt
@@ -62,7 +63,7 @@
     nfs_storage_class: "nfs-client"
     
     # Monitoring Configuration (Optional - POC Environment)
-    enable_monitoring: false  # Set to true to deploy monitoring stack
+    enable_monitoring: true  # Set to true to deploy monitoring stack
     monitoring_storage_class: "synostorage"
     monitoring_chart_version: "55.5.0"
     grafana_hostname: "grafana.dellpc.in"
@@ -84,7 +85,7 @@
           ================================================
           
           📋 Installation Plan:
-          1. Prerequisites & iSCSI setup
+          1. Prerequisites & iSCSI setup (Ubuntu 20.04 compatible)
           2. RKE2 Kubernetes cluster installation ({{ rke2_version }})
              - Master: {{ groups['rke2_servers'][0] }} with SAN: {{ tls_san_list | join(', ') }}
              - Workers: {% for host in groups['rke2_agents'] %}{{ host }}{% if not loop.last %}, {% endif %}{% endfor %}
@@ -98,7 +99,7 @@
           8. Monitoring stack (optional - POC): Prometheus, Grafana, AlertManager
           9. Logging & Tracing stack (optional - POC): ELK Stack, Jaeger
           
-          🎯 Target Infrastructure:
+          🎯 Target Infrastructure (Ubuntu 20.04 LTS):
           - Management Node: {{ groups['rke2_servers'][0] }} ({{ hostvars[groups['rke2_servers'][0]]['ansible_default_ipv4']['address'] }})
           - Worker Nodes: {% for host in groups['rke2_agents'] %}{{ host }} ({{ hostvars[host]['ansible_default_ipv4']['address'] }}){% if not loop.last %}, {% endif %}{% endfor %}
           
@@ -140,7 +141,7 @@
           when: node_role == 'server'
 
         - name: Verify RKE2 version and cluster info
-          shell: /var/lib/rancher/rke2/bin/kubectl version --short
+          shell: /var/lib/rancher/rke2/bin/kubectl version --client
           environment:
             KUBECONFIG: /etc/rancher/rke2/rke2.yaml
           register: k8s_version

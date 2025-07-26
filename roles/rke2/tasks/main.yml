@@ -1,296 +1,207 @@
 ---
-# RKE2 Installation Role
-- name: Create RKE2 directories
+# RKE2 Installation Role - Ubuntu Default Method
+# Using official RKE2 installation script with Ubuntu defaults
+
+- name: Display RKE2 installation overview
+  debug:
+    msg: |
+      🚀 RKE2 Installation - Ubuntu Default Method
+      =============================================
+      
+      📦 Node: {{ inventory_hostname }}
+      🎯 Role: {{ node_role }}
+      🌐 API Server: {{ hostvars[groups['rke2_servers'][0]]['ansible_default_ipv4']['address'] }}
+      📍 Ubuntu Version: {{ ansible_distribution }} {{ ansible_distribution_version }}
+      
+      🔧 Installation Method: Official Rancher Installation Script
+      📦 Version: {{ rke2_version }}
+
+# Step 1: Prerequisites for Ubuntu
+- name: Install prerequisite packages
+  apt:
+    name:
+      - curl
+      - ca-certificates
+      - iptables
+    state: present
+    update_cache: yes
+    
+# Step 2: Download and run RKE2 installation script
+- name: Download RKE2 installation script
+  get_url:
+    url: https://get.rke2.io
+    dest: /tmp/install-rke2.sh
+    mode: '0755'
+    
+- name: Install RKE2 server using official script
+  shell: |
+    INSTALL_RKE2_VERSION={{ rke2_version }} \
+    INSTALL_RKE2_TYPE=server \
+    /tmp/install-rke2.sh
+  when: node_role == 'server'
+  
+- name: Install RKE2 agent using official script
+  shell: |
+    INSTALL_RKE2_VERSION={{ rke2_version }} \
+    INSTALL_RKE2_TYPE=agent \
+    /tmp/install-rke2.sh
+  when: node_role == 'agent'
+  
+# Step 3: Configuration
+- name: Create RKE2 config directory
   file:
-    path: "{{ item }}"
+    path: /etc/rancher/rke2
     state: directory
     mode: '0755'
-  loop:
-    - /etc/rancher/rke2
-    - /var/lib/rancher/rke2/server/manifests
-
-- name: Download RKE2 installation script using curl
-  shell: |
-    curl -sfL https://get.rke2.io -o /tmp/install-rke2.sh
-    chmod +x /tmp/install-rke2.sh
-  args:
-    creates: /tmp/install-rke2.sh
-  retries: 3
-  delay: 10
-
-- name: Check for existing RKE2 RPM packages
-  shell: rpm -qa | grep rke2 || echo "No RKE2 RPM packages found"
-  register: rke2_rpms
-  ignore_errors: true
-
-- name: Remove existing RKE2 RPM packages if found
-  shell: |
-    if [ -f /usr/local/bin/rke2-uninstall.sh ]; then
-      /usr/local/bin/rke2-uninstall.sh
-    fi
-    rpm -qa | grep rke2 | xargs -r rpm -e --nodeps
-  when: "'rke2' in rke2_rpms.stdout"
-  ignore_errors: true
-
-- name: Install RKE2 server using tarball method (for servers)
-  shell: |
-    INSTALL_RKE2_VERSION={{ rke2_version }} \
-    INSTALL_RKE2_METHOD=tar \
-    sh /tmp/install-rke2.sh
-  args:
-    creates: /usr/local/bin/rke2
-  when: node_role == 'server'
-  retries: 3
-  delay: 30
-  register: rke2_server_install
-  
-- name: Verify RKE2 server installation
-  stat:
-    path: /usr/local/bin/rke2
-  register: rke2_binary_check
-  when: node_role == 'server'
-  
-- name: Fail if RKE2 server installation failed
-  fail:
-    msg: "RKE2 server installation failed - binary not found"
-  when: node_role == 'server' and not rke2_binary_check.stat.exists
-
-- name: Install RKE2 agent using tarball method (for agents)
-  shell: |
-    INSTALL_RKE2_VERSION={{ rke2_version }} \
-    INSTALL_RKE2_METHOD=tar \
-    INSTALL_RKE2_TYPE="agent" \
-    sh /tmp/install-rke2.sh
-  args:
-    creates: /usr/local/bin/rke2
-  when: node_role == 'agent'
-  retries: 3
-  delay: 30
-  register: rke2_agent_install
-  
-- name: Verify RKE2 agent installation
-  stat:
-    path: /usr/local/bin/rke2
-  register: rke2_agent_binary_check
-  when: node_role == 'agent'
-  
-- name: Fail if RKE2 agent installation failed
-  fail:
-    msg: "RKE2 agent installation failed - binary not found"
-  when: node_role == 'agent' and not rke2_agent_binary_check.stat.exists
-
-- name: Create RKE2 server systemd service file
-  copy:
-    content: |
-      [Unit]
-      Description=Rancher Kubernetes Engine v2 (server)
-      Documentation=https://github.com/rancher/rke2#readme
-      Wants=network-online.target
-      After=network-online.target
-      Conflicts=rke2-agent.service
-
-      [Service]
-      Type=notify
-      EnvironmentFile=-/etc/default/rke2-server
-      EnvironmentFile=-/etc/sysconfig/rke2-server
-      EnvironmentFile=-/usr/local/lib/systemd/system/rke2-server.env
-      KillMode=process
-      Delegate=yes
-      LimitNOFILE=1048576
-      LimitNPROC=1048576
-      LimitCORE=infinity
-      TasksMax=infinity
-      TimeoutStartSec=0
-      Restart=always
-      RestartSec=5s
-      ExecStartPre=/bin/sh -xc '! /usr/bin/systemctl is-enabled --quiet nm-cloud-setup.service'
-      ExecStartPre=/sbin/modprobe br_netfilter
-      ExecStartPre=/sbin/modprobe overlay
-      ExecStart=/usr/local/bin/rke2 server
-      ExecStopPost=/bin/sh -c 'systemd-cgls /system.slice/%n | grep -Eo "[0-9]+ (containerd|kubelet)" | awk "{print $1}" | xargs -r kill'
-
-      [Install]
-      WantedBy=multi-user.target
-    dest: /usr/local/lib/systemd/system/rke2-server.service
-    mode: '0644'
-  when: node_role == 'server'
-
-- name: Create RKE2 agent systemd service file
-  copy:
-    content: |
-      [Unit]
-      Description=Rancher Kubernetes Engine v2 (agent)
-      Documentation=https://github.com/rancher/rke2#readme
-      Wants=network-online.target
-      After=network-online.target
-      Conflicts=rke2-server.service
-
-      [Service]
-      Type=notify
-      EnvironmentFile=-/etc/default/rke2-agent
-      EnvironmentFile=-/etc/sysconfig/rke2-agent
-      EnvironmentFile=-/usr/local/lib/systemd/system/rke2-agent.env
-      KillMode=process
-      Delegate=yes
-      LimitNOFILE=1048576
-      LimitNPROC=1048576
-      LimitCORE=infinity
-      TasksMax=infinity
-      TimeoutStartSec=0
-      Restart=always
-      RestartSec=5s
-      ExecStartPre=/bin/sh -xc '! /usr/bin/systemctl is-enabled --quiet nm-cloud-setup.service'
-      ExecStartPre=/sbin/modprobe br_netfilter
-      ExecStartPre=/sbin/modprobe overlay
-      ExecStart=/usr/local/bin/rke2 agent
-      ExecStopPost=/bin/sh -c 'systemd-cgls /system.slice/%n | grep -Eo "[0-9]+ (containerd|kubelet)" | awk "{print $1}" | xargs -r kill'
-
-      [Install]
-      WantedBy=multi-user.target
-    dest: /usr/local/lib/systemd/system/rke2-agent.service
-    mode: '0644'
-  when: node_role == 'agent'
-
-- name: Reload systemd to pick up new service files
-  systemd:
-    daemon_reload: yes
-
-- name: Generate cluster token
-  shell: openssl rand -hex 32
-  register: cluster_token
-  when: node_role == 'server'
-  run_once: true
-  delegate_to: "{{ groups['rke2_servers'][0] }}"
-
+    
 - name: Create RKE2 server configuration
   copy:
     content: |
-      # RKE2 Server Configuration
-      token: {{ hostvars[groups['rke2_servers'][0]]['cluster_token']['stdout'] }}
-      cluster-cidr: {{ cluster_cidr }}
-      service-cidr: {{ service_cidr }}
-      cluster-dns: {{ cluster_dns }}
-      cluster-domain: cluster.local
-      
-      # TLS SAN configuration for external access
+      # RKE2 Server Configuration - Ubuntu Default
+      write-kubeconfig-mode: "0644"
       tls-san:
-        - {{ ansible_default_ipv4.address }}
-        - {{ metallb_api_server_ip }}
-        - {{ rancher_hostname }}
-        - localhost
-        - 127.0.0.1
-      
-      # Network settings
-      cni: canal
-      disable-kube-proxy: false
-      
-      # Security settings
-      secrets-encryption: true
-      
-      # Performance tuning for 6GB nodes
-      etcd-arg:
-        - "--heartbeat-interval=500"
-        - "--election-timeout=5000"
-        - "--max-request-bytes=33554432"
-      
-      kube-apiserver-arg:
-        - "--max-requests-inflight=800"
-        - "--max-mutating-requests-inflight=400"
-        - "--request-timeout=300s"
-      
-      kube-controller-manager-arg:
-        - "--node-monitor-period=5s"
-        - "--node-monitor-grace-period=20s"
-      
-      kubelet-arg:
-        - "--max-pods=110"
-        - "--kube-reserved=cpu=200m,memory=300Mi"
-        - "--system-reserved=cpu=200m,memory=200Mi"
-        - "--eviction-hard=memory.available<500Mi"
-        - "--image-gc-high-threshold=85"
-        - "--image-gc-low-threshold=80"
+        - "{{ ansible_default_ipv4.address }}"
+        - "{{ inventory_hostname }}"
+        - "{{ cluster_api_ha_ip }}"
+      cluster-cidr: "{{ cluster_cidr }}"
+      service-cidr: "{{ service_cidr }}"
+      cluster-dns: "{{ cluster_dns }}"
+      # Ubuntu-specific defaults
+      cni: "canal"
     dest: /etc/rancher/rke2/config.yaml
     mode: '0600'
   when: node_role == 'server'
-
+  
+# Step 4: Start server first to get token
+- name: Enable and start RKE2 server service
+  systemd:
+    name: rke2-server
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  when: node_role == 'server'
+  
+- name: Wait for server to be ready
+  wait_for:
+    port: 9345
+    host: "{{ ansible_default_ipv4.address }}"
+    delay: 10
+    timeout: 300
+  when: node_role == 'server'
+  
+- name: Wait for node-token file to be created
+  wait_for:
+    path: /var/lib/rancher/rke2/server/node-token
+  when: node_role == 'server'
+  
+- name: Get server token (from first server)
+  slurp:
+    src: /var/lib/rancher/rke2/server/node-token
+  register: server_token
+  when: node_role == 'server' and inventory_hostname == groups['rke2_servers'][0]
+  
+- name: Store token for agents
+  set_fact:
+    rke2_token: "{{ hostvars[groups['rke2_servers'][0]]['server_token']['content'] | b64decode | trim }}"
+  when: node_role == 'agent'
+  
+# Step 5: Configure and start agents
 - name: Create RKE2 agent configuration
   copy:
     content: |
-      # RKE2 Agent Configuration
+      # RKE2 Agent Configuration - Ubuntu Default
       server: https://{{ hostvars[groups['rke2_servers'][0]]['ansible_default_ipv4']['address'] }}:9345
-      token: {{ hostvars[groups['rke2_servers'][0]]['cluster_token']['stdout'] }}
-      
-      # Performance tuning for 6GB nodes
-      kubelet-arg:
-        - "--max-pods=110"
-        - "--kube-reserved=cpu=200m,memory=300Mi"
-        - "--system-reserved=cpu=200m,memory=200Mi"
-        - "--eviction-hard=memory.available<500Mi"
-        - "--image-gc-high-threshold=85"
-        - "--image-gc-low-threshold=80"
+      token: {{ rke2_token }}
     dest: /etc/rancher/rke2/config.yaml
     mode: '0600'
   when: node_role == 'agent'
-
-- name: Check if RKE2 server is already running
+  
+- name: Enable and start RKE2 agent service
   systemd:
-    name: rke2-server
-  register: rke2_server_status
-  ignore_errors: true
-  when: node_role == 'server'
-
-- name: Start and enable RKE2 server
-  systemd:
-    name: rke2-server
+    name: rke2-agent
     enabled: yes
     state: started
     daemon_reload: yes
-  when: node_role == 'server' and (rke2_server_status.status.ActiveState is not defined or rke2_server_status.status.ActiveState != 'active')
-
-- name: Wait for RKE2 server to be ready
-  wait_for:
-    path: /var/lib/rancher/rke2/server/node-token
-    timeout: 300
-  when: node_role == 'server'
-
-- name: Wait for RKE2 kubeconfig to be available
-  wait_for:
-    path: /etc/rancher/rke2/rke2.yaml
-    timeout: 300
-  when: node_role == 'server'
-
-- name: Check if RKE2 agent is already running
-  systemd:
-    name: rke2-agent
-  register: rke2_agent_status
-  ignore_errors: true
   when: node_role == 'agent'
-
-- name: Start and enable RKE2 agent
-  systemd:
-    name: rke2-agent
-    enabled: yes
-    state: started
-    daemon_reload: yes
-  when: node_role == 'agent' and (rke2_agent_status.status.ActiveState is not defined or rke2_agent_status.status.ActiveState != 'active')
-
-- name: Create kubectl symlink and kubeconfig access
+  
+# Step 6: Post-installation setup
+- name: Add RKE2 binaries to PATH
+  copy:
+    content: |
+      # RKE2 binaries
+      export PATH=$PATH:/var/lib/rancher/rke2/bin
+    dest: /etc/profile.d/rke2.sh
+    mode: '0644'
+    
+- name: Create kubectl symlink
   file:
     src: /var/lib/rancher/rke2/bin/kubectl
     dest: /usr/local/bin/kubectl
     state: link
   when: node_role == 'server'
-
+  
 - name: Create .kube directory for root
   file:
     path: /root/.kube
     state: directory
-    mode: '0755'
+    mode: '0700'
   when: node_role == 'server'
-
+  
+- name: Set up kubeconfig for root user
+  copy:
+    src: /etc/rancher/rke2/rke2.yaml
+    dest: /root/.kube/config
+    remote_src: yes
+    mode: '0600'
+  when: node_role == 'server'
+  
+# Step 7: Verification and labeling
+- name: Wait for cluster to be ready
+  shell: /var/lib/rancher/rke2/bin/kubectl get nodes --no-headers | wc -l
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: node_count
+  until: node_count.stdout | int >= groups['rke2_nodes'] | length
+  retries: 30
+  delay: 10
+  when: node_role == 'server' and inventory_hostname == groups['rke2_servers'][0]
+  
 - name: Label worker nodes with worker role
   shell: /var/lib/rancher/rke2/bin/kubectl --kubeconfig=/etc/rancher/rke2/rke2.yaml label node {{ hostvars[item]['ansible_hostname'] }} node-role.kubernetes.io/worker=true --overwrite
   loop: "{{ groups['rke2_agents'] }}"
-  when: node_role == 'server'
+  when: node_role == 'server' and inventory_hostname == groups['rke2_servers'][0]
   ignore_errors: true
-  delegate_to: "{{ groups['rke2_servers'][0] }}"
+
+- name: Display cluster status
+  shell: /var/lib/rancher/rke2/bin/kubectl get nodes -o wide
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: cluster_status
+  when: node_role == 'server' and inventory_hostname == groups['rke2_servers'][0]
+  
+- name: Show RKE2 installation results
+  debug:
+    msg: |
+      ✅ RKE2 Installation Complete!
+      ==============================
+      
+      📦 Installation Method: Official RKE2 script
+      🎯 Node Role: {{ node_role }}
+      🚀 Service Status: Active
+      📦 Version: {{ rke2_version }}
+      
+      {% if node_role == 'server' and inventory_hostname == groups['rke2_servers'][0] %}
+      🌟 Cluster Status:
+      {{ cluster_status.stdout }}
+      
+      📋 Configuration Files:
+      - Config: /etc/rancher/rke2/config.yaml
+      - Kubeconfig: /etc/rancher/rke2/rke2.yaml
+      - Data Directory: /var/lib/rancher/rke2
+      
+      💡 Benefits:
+      - Official installation method
+      - Ubuntu default settings
+      - Canal CNI (Flannel + Calico)
+      - Standard systemd integration
+      {% endif %}
