@@ -76,3 +76,10 @@ nfs_server=192.168.1.225
 nfs_path=/volume3/size-4t-sub-2t1-dellpc-k8s
 nfs_namespace=nfs-provisioner
 nfs_storage_class=nfs-client
+
+# velero configuration
+enable_velero=true
+velero_namespace=velero
+velero_version=v1.10.0
+velero_backup_storage_location=default
+velero_volume_snapshot_location=default

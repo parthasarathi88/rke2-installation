@@ -1,0 +1,68 @@
+---
+# Velero Installation and Configuration Tasks
+
+- name: Create Velero namespace
+  shell: /var/lib/rancher/rke2/bin/kubectl create namespace {{ velero_namespace }} --dry-run=client -o yaml | /var/lib/rancher/rke2/bin/kubectl apply -f -
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  tags:
+    - velero
+
+- name: Add Velero Helm repository
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts
+    /usr/local/bin/helm repo update
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  tags:
+    - velero
+
+- name: Create Velero credentials file
+  copy:
+    content: |
+      [default]
+      aws_access_key_id={{ velero_s3_access_key }}
+      aws_secret_access_key={{ velero_s3_secret_key }}
+    dest: /tmp/velero-credentials
+    mode: '0600'
+  tags:
+    - velero
+
+- name: Install Velero via Helm
+  shell: |
+    export PATH=/usr/local/bin:$PATH
+    /usr/local/bin/helm upgrade --install velero vmware-tanzu/velero \
+      --namespace {{ velero_namespace }} \
+      --version {{ velero_version }} \
+      --set configuration.provider={{ velero_provider }} \
+      --set configuration.backupStorageLocation.name=default \
+      --set configuration.backupStorageLocation.bucket={{ velero_bucket }} \
+      --set configuration.backupStorageLocation.config.s3Url={{ velero_s3_url }} \
+      --set configuration.backupStorageLocation.config.region=minio \
+      --set credentials.secretContents.cloud={{ lookup('file', '/tmp/velero-credentials') | replace('\n', '\n') }} \
+      --set initContainers[0].name=velero-plugin-for-aws \
+      --set initContainers[0].image=velero/velero-plugin-for-aws:v1.8.0 \
+      --set initContainers[0].volumeMounts[0].mountPath=/target \
+      --set initContainers[0].volumeMounts[0].name=plugins \
+      --wait --timeout=600s
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  tags:
+    - velero
+
+- name: Display Velero status
+  shell: /var/lib/rancher/rke2/bin/kubectl get pods -n {{ velero_namespace }}
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  register: velero_status
+  tags:
+    - velero
+
+- name: Show Velero pod status
+  debug:
+    msg: |
+      🚀 Velero Deployment Status:
+      {{ velero_status.stdout }}
+  tags:
+    - velero

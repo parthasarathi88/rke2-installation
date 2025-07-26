@@ -1,0 +1,22 @@
+configuration:
+  provider: aws
+  backupStorageLocation:
+    name: default
+    bucket: {{ velero_bucket }}
+    config:
+      s3Url: {{ velero_s3_url }}
+      region: minio
+  volumeSnapshotLocation:
+    name: default
+    config:
+      region: minio
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.8.0
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+metrics:
+  enabled: true
+restic:
+  enabled: true

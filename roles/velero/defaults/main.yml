@@ -1,0 +1,11 @@
+---
+# Velero default variables
+velero_version: v1.13.2
+velero_namespace: velero
+velero_provider: aws
+velero_bucket: velero-backups
+velero_s3_url: http://minio.k8s.local:9000
+velero_s3_access_key: minioadmin
+velero_s3_secret_key: minioadmin
+velero_backup_schedule: daily
+velero_backup_ttl: 168h

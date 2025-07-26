@@ -233,6 +233,10 @@
       tags: ['logging', 'tracing', 'elk', 'jaeger']
       when: enable_logging_tracing | default(false)
 
+    - role: velero
+      tags: ['backup', 'velero']
+      when: enable_velero | default(false)
+
   tasks:
     - name: Verify MetalLB and API server external access
       block:

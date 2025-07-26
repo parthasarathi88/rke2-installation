@@ -112,6 +112,7 @@ install-*.yml.old
 inventory.bak
 inventory-*
 *.inventory
+inventory*
 
 # Database dumps and exports
 *.sql
